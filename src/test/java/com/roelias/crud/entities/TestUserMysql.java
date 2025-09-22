@@ -1,6 +1,7 @@
 package com.roelias.crud.entities;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.checkerframework.checker.units.qual.C;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -30,6 +31,7 @@ public class TestUserMysql {
 
     // Manual UUID (when you want to provide it)
     @UUID(autoGenerate = false)
+    @Column("manual_uuid")
     private String manualUuid;
 
     // JSON serialization - supports Objects, Maps, JsonNode
@@ -41,13 +43,14 @@ public class TestUserMysql {
     private Map<String, Object> metadata;  // Map
 
     @JsonColumn
+    @Column("raw_json")
     private JsonNode rawJson;  // JsonNode
 
     // Array handling
     @ArrayColumn(separator = ",")
     private List<String> tags;
 
-    @ArrayColumn(separator = "|")
+    @ArrayColumn(separator = ",")
     private String[] categories;
 
     // Enum handling - STRING mode
@@ -75,13 +78,159 @@ public class TestUserMysql {
 
     // Automatic timestamps
     @CreatedDate
+    @Column("created_at")
     private LocalDateTime createdAt;
 
     @UpdatedDate
+    @Column("updated_at")
     private LocalDateTime updatedAt;
 
     // Ignored field (not persisted)
     @Ignore
     private String temporaryField;
 
+
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public String getUuid() {
+        return uuid;
+    }
+
+    public void setUuid(String uuid) {
+        this.uuid = uuid;
+    }
+
+    public String getManualUuid() {
+        return manualUuid;
+    }
+
+    public void setManualUuid(String manualUuid) {
+        this.manualUuid = manualUuid;
+    }
+
+    public UserPreferences getPreferences() {
+        return preferences;
+    }
+
+    public void setPreferences(UserPreferences preferences) {
+        this.preferences = preferences;
+    }
+
+    public Map<String, Object> getMetadata() {
+        return metadata;
+    }
+
+    public void setMetadata(Map<String, Object> metadata) {
+        this.metadata = metadata;
+    }
+
+    public JsonNode getRawJson() {
+        return rawJson;
+    }
+
+    public void setRawJson(JsonNode rawJson) {
+        this.rawJson = rawJson;
+    }
+
+    public List<String> getTags() {
+        return tags;
+    }
+
+    public void setTags(List<String> tags) {
+        this.tags = tags;
+    }
+
+    public String[] getCategories() {
+        return categories;
+    }
+
+    public void setCategories(String[] categories) {
+        this.categories = categories;
+    }
+
+    public Status getStatus() {
+        return status;
+    }
+
+    public void setStatus(Status status) {
+        this.status = status;
+    }
+
+    public Priority getPriority() {
+        return priority;
+    }
+
+    public void setPriority(Priority priority) {
+        this.priority = priority;
+    }
+
+    public Department getDepartment() {
+        return department;
+    }
+
+    public void setDepartment(Department department) {
+        this.department = department;
+    }
+
+    public byte[] getDocument() {
+        return document;
+    }
+
+    public void setDocument(byte[] document) {
+        this.document = document;
+    }
+
+    public Boolean getActive() {
+        return active;
+    }
+
+    public void setActive(Boolean active) {
+        this.active = active;
+    }
+
+    public Integer getAttempts() {
+        return attempts;
+    }
+
+    public void setAttempts(Integer attempts) {
+        this.attempts = attempts;
+    }
+
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(LocalDateTime updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+
+    public String getTemporaryField() {
+        return temporaryField;
+    }
+
+    public void setTemporaryField(String temporaryField) {
+        this.temporaryField = temporaryField;
+    }
 }
