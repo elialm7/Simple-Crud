@@ -1,13 +1,18 @@
 # Simple - CRUD Library for Java
 
-A lightweight, annotation-driven CRUD library for Java with automatic SQL generation and type transformations. Supports MySQL and PostgreSQL fully.
+A lightweight, annotation-driven CRUD library for Java with automatic SQL generation and type transformations. Supports **MySQL and PostgreSQL fully**.
 Built on top of JDBI.
 
 ## Features
 
 * **Zero configuration**: Define entities with annotations.
-* **Automatic SQL generation**: INSERT, UPDATE, SELECT statements created automatically.
-* **Type transformations**: JSON, arrays, enums, UUIDs handled automatically.
+* **Automatic SQL generation**: INSERT, UPDATE, SELECT, DELETE statements created automatically.
+* **Type transformations**: JSON, arrays, enums, UUIDs, timestamps handled automatically.
+* **Dynamic Filtering**: Powerful filtering with operators (LIKE, IN, BETWEEN, IS_NULL, etc.).
+* **Batch Operations**: Efficient bulk inserts.
+* **Automatic Timestamps**: `@CreatedDate` and `@UpdatedDate` annotations.
+* **Default Values**: `@Default` annotation for fallback values.
+* **Flexible Mapping**: `getCustomRowMapper()` for mapping to DTOs without `@Table` annotation.
 
 ---
 
@@ -28,6 +33,10 @@ public class TestUserPostgresql {
     @UUID(autoGenerate = true)
     @Column("uuid_field")
     private java.util.UUID uuid;
+
+    @UUID(autoGenerate = false)
+    @Column("manual_uuid")
+    private String manualUuid;
 
     @JsonColumn
     @Column("preferences_json")
@@ -58,6 +67,12 @@ public class TestUserPostgresql {
     @FileColumn
     private byte[] document;
 
+    @Default("true")
+    private Boolean active;
+
+    @Default("0")
+    private Integer attempts;
+
     @CreatedDate
     @Column("created_at")
     private LocalDateTime createdAt;
@@ -65,6 +80,9 @@ public class TestUserPostgresql {
     @UpdatedDate
     @Column("updated_at")
     private LocalDateTime updatedAt;
+
+    @Ignore
+    private String temporaryField;
 }
 ```
 
@@ -116,12 +134,32 @@ user.setCategories(new String[]{"cat1","cat2"});
 user.setStatus(Status.ACTIVE);
 user.setPriority(Priority.HIGH);
 user.setDepartment(Department.ENGINEERING);
+user.setActive(true); // Will use default if null
 
 Long id = crud.save(user);
 
-// Read
+// Read All
 List<TestUserPostgresql> allUsers = crud.findAll();
+
+// Find by ID
 Optional<TestUserPostgresql> oneUser = crud.findById(id);
+
+// Dynamic Filtering
+Map<String, Object> filters = new HashMap<>();
+filters.put("name_LIKE", "John"); // LIKE '%John%'
+filters.put("status", "ACTIVE"); // EQUALS
+filters.put("priority_GREATER_THAN", 1);
+filters.put("tags_LIKE", "%test%"); // Filter on joined string
+filters.put("uuid_IS_NOT_NULL", ""); // Check for non-null UUID
+
+List<TestUserPostgresql> filteredUsers = crud.findAll(filters);
+
+// Advanced Filtering
+filters.clear();
+filters.put("priority_BETWEEN", "1,3"); // BETWEEN 1 AND 3
+filters.put("department_IN", "SALE,ENG"); // IN ('SALE', 'ENG')
+
+filteredUsers = crud.findAll(filters);
 
 // Update
 user.setName("John Updated");
@@ -129,6 +167,10 @@ crud.update(user);
 
 // Delete
 crud.deleteById(id);
+
+// Batch Insert
+List<TestUserPostgresql> users = createManyUsers();
+crud.saveAll(users);
 ```
 
 ---
@@ -142,6 +184,7 @@ CREATE TABLE public.complex_entities (
     id BIGSERIAL PRIMARY KEY,
     entity_name VARCHAR(255),
     uuid_field UUID,
+    manual_uuid UUID,
     preferences_json JSONB,
     metadata JSONB,
     raw_json JSONB,
@@ -151,6 +194,8 @@ CREATE TABLE public.complex_entities (
     priority INTEGER,
     department VARCHAR(10),
     document BYTEA,
+    active BOOLEAN DEFAULT TRUE,
+    attempts INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -161,19 +206,22 @@ CREATE TABLE public.complex_entities (
 ```sql
 CREATE TABLE complex_entities (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    entity_name VARCHAR(255),
-    uuid_field VARCHAR(36),
-    preferences_json JSON,
-    metadata JSON,
-    raw_json JSON,
-    tags TEXT,
-    categories TEXT,
-    status VARCHAR(50),
-    priority INT,
-    department VARCHAR(10),
-    document LONGBLOB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    entity_name VARCHAR(255) NULL,
+    uuid_field VARCHAR(36) NULL,
+    manual_uuid VARCHAR(36) NULL,
+    preferences_json JSON NULL,
+    metadata JSON NULL,
+    raw_json JSON NULL,
+    tags TEXT NULL,
+    categories TEXT NULL,
+    status VARCHAR(50) NULL,
+    priority INT NULL,
+    department VARCHAR(10) NULL,
+    document LONGBLOB NULL,
+    active TINYINT(1) DEFAULT 1 NULL,
+    attempts INT DEFAULT 0 NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP
 );
 ```
 
@@ -184,32 +232,38 @@ CREATE TABLE complex_entities (
 | Java Type               | PostgreSQL      | MySQL           | Notes                                 |
 | ----------------------- | --------------- | --------------- | ------------------------------------- |
 | String                  | VARCHAR/TEXT    | VARCHAR/TEXT    | Regular string                        |
-| UUID                    | UUID            | VARCHAR(36)     | Native in PG, string in MySQL         |
+| UUID (auto/manual)      | UUID            | VARCHAR(36)     | Native in PG, string in MySQL         |
 | Object / Map / JsonNode | JSONB           | JSON            | Auto-serialized via Jackson           |
 | List<String>            | TEXT            | TEXT            | Comma-separated or custom separator   |
 | String\[]               | TEXT            | TEXT            | Use @ArrayColumn for custom separator |
-| Enum                    | VARCHAR/INTEGER | VARCHAR/INTEGER | STRING / ORDINAL / CODE               |
+| Enum (STRING)           | VARCHAR(50)     | VARCHAR(50)     | Stores enum name                      |
+| Enum (ORDINAL)          | INTEGER         | INT             | Stores enum ordinal (0,1,2…)          |
+| Enum (CODE)             | VARCHAR(10)     | VARCHAR(10)     | Stores custom code via `getCode()`    |
 | byte\[]                 | BYTEA           | LONGBLOB        | File storage                          |
+| Boolean                 | BOOLEAN         | TINYINT(1)      | With `@Default` support               |
+| Integer                 | INTEGER         | INT             | With `@Default` support               |
 | LocalDateTime           | TIMESTAMP       | TIMESTAMP       | Used for audit fields                 |
 
 ---
 # CRUD Library - Data Type Mapping Diagram
 
-| Java Type                       | Annotation                      | PostgreSQL Column     | MySQL Column          | Notes                                              |                                 |
-| ------------------------------- | ------------------------------- | --------------------- | --------------------- | -------------------------------------------------- | ------------------------------- |
-| `String`                        | `@Column`                       | `VARCHAR(n)` / `TEXT` | `VARCHAR(n)` / `TEXT` | Simple string mapping                              |                                 |
-| `java.util.UUID`                | `@UUID(autoGenerate = true)`    | `UUID`                | `VARCHAR(36)`         | Auto-generated UUID, native in PG, string in MySQL |                                 |
-| `Object` / `Map<String,Object>` | `@JsonColumn`                   | `JSONB`               | `JSON`                | Auto-serialized via Jackson                        |                                 |
-| `JsonNode`                      | `@JsonColumn`                   | `JSONB`               | `JSON`                | Raw JSON, can store any structure                  |                                 |
-| `List<String>`                  | `@ArrayColumn(separator=",")`   | `TEXT`                | `TEXT`                | Stored as comma-separated string                   |                                 |
-| `String[]`                      | \`@ArrayColumn(separator="      | ")\`                  | `TEXT`                | `TEXT`                                             | Stored as pipe-separated string |
-| Enum (STRING)                   | `@EnumColumn(EnumType.STRING)`  | `VARCHAR(50)`         | `VARCHAR(50)`         | Stores enum name                                   |                                 |
-| Enum (ORDINAL)                  | `@EnumColumn(EnumType.ORDINAL)` | `INTEGER`             | `INT`                 | Stores enum ordinal (0,1,2…)                       |                                 |
-| Enum (CODE)                     | `@EnumColumn(EnumType.CODE)`    | `VARCHAR(10)`         | `VARCHAR(10)`         | Stores custom code via `getCode()`                 |                                 |
-| `byte[]`                        | `@FileColumn`                   | `BYTEA`               | `LONGBLOB`            | File storage                                       |                                 |
-| `Boolean`                       | `@Default("true")`              | `BOOLEAN`             | `TINYINT(1)`          | Default value support                              |                                 |
-| `Integer`                       | `@Default("0")`                 | `INTEGER`             | `INT`                 | Default value support                              |                                 |
-| `LocalDateTime`                 | `@CreatedDate` / `@UpdatedDate` | `TIMESTAMP`           | `TIMESTAMP`           | Auto timestamps for creation/update                |                                 |
+| Java Type                       | Annotation                      | PostgreSQL Column     | MySQL Column          | Notes                                              |
+| ------------------------------- | ------------------------------- | --------------------- | --------------------- | -------------------------------------------------- |
+| `String`                        | `@Column`                       | `VARCHAR(n)` / `TEXT` | `VARCHAR(n)` / `TEXT` | Simple string mapping                              |
+| `java.util.UUID`                | `@UUID(autoGenerate = true)`    | `UUID`                | `VARCHAR(36)`         | Auto-generated, native in PG                       |
+| `String` (Manual UUID)          | `@UUID(autoGenerate = false)`   | `UUID`                | `VARCHAR(36)`         | You provide value, PG casts `::uuid`               |
+| `Object` / `Map<String,Object>` | `@JsonColumn`                   | `JSONB`               | `JSON`                | Auto-serialized via Jackson, PG casts `::jsonb`    |
+| `JsonNode`                      | `@JsonColumn`                   | `JSONB`               | `JSON`                | Raw JSON, can store any structure                  |
+| `List<String>`                  | `@ArrayColumn(separator=",")`   | `TEXT`                | `TEXT`                | Stored as comma-separated string                   |
+| `String[]`                      | `@ArrayColumn(separator="      | ")\`                  | `TEXT`                | `TEXT`                                             | Stored as pipe-separated string                    |
+| Enum (STRING)                   | `@EnumColumn(EnumType.STRING)`  | `VARCHAR(50)`         | `VARCHAR(50)`         | Stores enum name                                   |
+| Enum (ORDINAL)                  | `@EnumColumn(EnumType.ORDINAL)` | `INTEGER`             | `INT`                 | Stores enum ordinal (0,1,2…)                       |
+| Enum (CODE)                     | `@EnumColumn(EnumType.CODE)`    | `VARCHAR(10)`         | `VARCHAR(10)`         | Stores custom code via `getCode()`                 |
+| `byte[]`                        | `@FileColumn`                   | `BYTEA`               | `LONGBLOB`            | File storage                                       |
+| `Boolean`                       | `@Default("true")`              | `BOOLEAN`             | `TINYINT(1)`          | Default value support                              |
+| `Integer`                       | `@Default("0")`                 | `INTEGER`             | `INT`                 | Default value support                              |
+| `LocalDateTime`                 | `@CreatedDate` / `@UpdatedDate` | `TIMESTAMP`           | `TIMESTAMP`           | Auto timestamps for creation/update                |
+| Any Field                       | `@Ignore`                       | N/A                   | N/A                   | Field is excluded from all DB operations           |
 
 ---
 
@@ -217,28 +271,97 @@ CREATE TABLE complex_entities (
 
 | Database   | Support                                                   |
 | ---------- | --------------------------------------------------------- |
-| PostgreSQL | ✅ Full support (UUID, JSONB, arrays, enums)               |
-| MySQL 5.7+ | ✅ Full support (UUID as string, JSON, arrays, enums)      |
-| SQL Server | ⚠ Untested – likely works for basic types, UUID as string |
+| PostgreSQL | ✅ **Full support** (UUID, JSONB, arrays, enums, dialect-specific casts) |
+| MySQL 5.7+ | ✅ **Full support** (UUID as string, JSON, arrays, enums)      |
+| Others     | ⚠ Untested – basic types might work, but no guarantees.   |
 
-> ⚠ Only MySQL and PostgreSQL fully tested. Other databases may work but require additional configuration.
-
----
-
-## 6. Notes & Best Practices
-
-* UUID: Auto-generated or manual. PostgreSQL uses native UUID type, MySQL stores as string.
-* JSON: Annotate with `@JsonColumn`. Supports custom objects, maps, or `JsonNode`.
-* Arrays: Annotate with `@ArrayColumn(separator)`.
-* Enums: Use `@EnumColumn` and choose STRING, ORDINAL, or CODE.
-* Files: Use `@FileColumn` with `byte[]`.
-* Timestamps: Use `@CreatedDate` and `@UpdatedDate` for automatic handling.
-* Batch inserts/updates supported for large datasets.
-* Transactions supported via JDBI `withHandle` or `inTransaction`.
+> ✅ **Only MySQL and PostgreSQL are officially supported and fully tested.** Other databases may work for basic operations but lack dialect-specific optimizations.
 
 ---
 
-## 7. Dependencies
+## 6. Filtering Queries
+
+The library supports powerful, dynamic filtering using a `Map<String, Object>`.
+
+### Basic Operators
+
+* **`fieldName`**: Implies `EQUALS`.
+* **`fieldName_NOT_EQUALS`**: Not equal.
+* **`fieldName_GREATER_THAN`**: Greater than.
+* **`fieldName_LESS_THAN`**: Less than.
+* **`fieldName_GREATER_THAN_OR_EQUAL`**: Greater than or equal.
+* **`fieldName_LESS_THAN_OR_EQUAL`**: Less than or equal.
+* **`fieldName_LIKE`**: Contains (LIKE '%value%').
+* **`fieldName_STARTS_WITH`**: Starts with (LIKE 'value%').
+* **`fieldName_ENDS_WITH`**: Ends with (LIKE '%value').
+
+### Advanced Operators
+
+* **`fieldName_IN`**: Value is in a set. Value can be a `String` (comma-separated), `List`, or `Object[]`.
+* **`fieldName_NOT_IN`**: Value is not in a set.
+* **`fieldName_BETWEEN`**: Value is between two values. Value must be a `String` ("min,max"), `List` (size 2), or `Object[]` (size 2).
+* **`fieldName_IS_NULL`**: Field is NULL.
+* **`fieldName_IS_NOT_NULL`**: Field is NOT NULL.
+
+### Filtering Restrictions
+
+* **`@JsonColumn`**: Only supports `EQUALS`, `IS_NULL`, `IS_NOT_NULL`.
+* **`@FileColumn`**: Only supports `IS_NULL`, `IS_NOT_NULL`.
+* **`@Ignore`**: Cannot be used for filtering.
+
+### Example
+
+```java
+Map<String, Object> filters = new HashMap<>();
+
+// Simple equals
+filters.put("status", "ACTIVE");
+
+// LIKE
+filters.put("name_LIKE", "John");
+
+// IN
+filters.put("department_IN", "SALE,ENG"); // String
+// or
+filters.put("department_IN", List.of("SALE", "ENG")); // List
+
+// BETWEEN
+filters.put("priority_BETWEEN", "1,3"); // String
+// or
+filters.put("priority_BETWEEN", new Object[]{1, 3}); // Array
+
+// IS NOT NULL
+filters.put("uuid_IS_NOT_NULL", "");
+
+// Pagination + Sorting
+List<TestUserPostgresql> page = crud.findAll(filters, 10, 0); // Limit 10, Offset 0
+List<TestUserPostgresql> sorted = crud.findAll(filters, "name", true); // Sort by name ASC
+
+// Count
+long count = crud.count(filters);
+
+// Exists
+boolean exists = crud.exists(filters);
+```
+
+---
+
+## 7. Notes & Best Practices
+
+* **UUID**: For PostgreSQL, prefer `java.util.UUID` type for native handling. For MySQL, `String` is fine.
+* **JSON**: Annotate with `@JsonColumn`. Supports complex objects, maps, or `JsonNode`.
+* **Arrays**: Annotate with `@ArrayColumn(separator)`. Filtering is done on the *joined string*.
+* **Enums**: Use `@EnumColumn` and choose `STRING` (recommended for safety), `ORDINAL` (fragile), or `CODE` (custom).
+* **Files**: Use `@FileColumn` with `byte[]`.
+* **Timestamps**: Use `@CreatedDate` (set once) and `@UpdatedDate` (set on every update).
+* **Defaults**: Use `@Default` to provide fallback values for `null` fields.
+* **Ignore**: Use `@Ignore` for fields that should never touch the database.
+* **Batch Operations**: Use `saveAll(List<E>)` for high-performance bulk inserts.
+* **Transactions**: All write operations (`save`, `update`, `delete`) are automatically wrapped in transactions via JDBI.
+
+---
+
+## 8. Dependencies
 
 To use the CRUD library, you need the following libraries in your project:
 
@@ -250,7 +373,7 @@ To use the CRUD library, you need the following libraries in your project:
     <dependency>
         <groupId>org.jdbi</groupId>
         <artifactId>jdbi3-core</artifactId>
-        <version>3.40.0</version>
+        <version>3.41.0</version>
     </dependency>
 
     <!-- PostgreSQL Driver (for PostgreSQL support) -->
@@ -271,7 +394,14 @@ To use the CRUD library, you need the following libraries in your project:
     <dependency>
         <groupId>com.fasterxml.jackson.core</groupId>
         <artifactId>jackson-databind</artifactId>
-        <version>2.15.2</version>
+        <version>2.17.1</version>
+    </dependency>
+
+    <!-- SLF4J API (for logging) -->
+    <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+        <version>2.0.12</version>
     </dependency>
 </dependencies>
 ```
@@ -279,8 +409,6 @@ To use the CRUD library, you need the following libraries in your project:
 ### Notes
 
 * PostgreSQL and MySQL are the officially tested databases.
-* Jackson is used for JSON columns (`@JsonColumn`).
+* Jackson is **required** for `@JsonColumn` functionality.
 * JDBI handles all SQL generation, object mapping, and transactions.
-* Other JDBC-compatible databases **might work**, but have not been fully tested.
-
----
+* Other JDBC-compatible databases **might work**, but have not been fully tested and lack dialect-specific features.
