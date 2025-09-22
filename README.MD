@@ -1,5 +1,3 @@
----
-
 # Simple - CRUD Library for Java
 
 A lightweight, annotation-driven CRUD library for Java with automatic SQL generation and type transformations. Supports MySQL and PostgreSQL fully.
