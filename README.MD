@@ -1,5 +1,3 @@
-Perfecto, te propongo una versión simplificada y enfocada en **MySQL y PostgreSQL**, con un ejemplo completo que cubre **entidad, SQL y mapeo a objeto**, explicaciones de tipos y base de datos soportadas. Mantengo tu estilo de Markdown pero más conciso y práctico.
-
 ---
 
 # Simple - CRUD Library for Java
