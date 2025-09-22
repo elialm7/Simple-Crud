@@ -238,6 +238,49 @@ CREATE TABLE complex_entities (
 
 ---
 
-Si querés, puedo hacer una **segunda versión aún más visual**, con un diagrama que muestre **tipo de dato → columna SQL → anotación Java**, para que quede súper claro cómo funciona el mapeo entre objetos y bases.
+## 7. Dependencies
 
-¿Querés que haga eso también?
+To use the CRUD library, you need the following libraries in your project:
+
+### Maven
+
+```xml
+<dependencies>
+    <!-- JDBI Core (required for database access and SQL mapping) -->
+    <dependency>
+        <groupId>org.jdbi</groupId>
+        <artifactId>jdbi3-core</artifactId>
+        <version>3.40.0</version>
+    </dependency>
+
+    <!-- PostgreSQL Driver (for PostgreSQL support) -->
+    <dependency>
+        <groupId>org.postgresql</groupId>
+        <artifactId>postgresql</artifactId>
+        <version>42.7.0</version>
+    </dependency>
+
+    <!-- MySQL Driver (for MySQL support) -->
+    <dependency>
+        <groupId>mysql</groupId>
+        <artifactId>mysql-connector-java</artifactId>
+        <version>8.1.0</version>
+    </dependency>
+
+    <!-- Jackson Databind (for JSON serialization/deserialization) -->
+    <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>2.15.2</version>
+    </dependency>
+</dependencies>
+```
+
+### Notes
+
+* PostgreSQL and MySQL are the officially tested databases.
+* Jackson is used for JSON columns (`@JsonColumn`).
+* JDBI handles all SQL generation, object mapping, and transactions.
+* Other JDBC-compatible databases **might work**, but have not been fully tested.
+
+---
