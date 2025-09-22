@@ -276,4 +276,10 @@ public class TestMysql {
         ));
         users.forEach(u -> System.out.println("Found User: " + u.getName()));
     }
+
+    @Test
+    void testSimpleUser(){
+        List<TestSimpleUserMysql> users = repository.listSimpleUsers();
+        users.forEach(System.out::println);
+    }
 }

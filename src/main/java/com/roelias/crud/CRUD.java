@@ -445,6 +445,46 @@ public abstract class CRUD<E, ID> {
     }
 
 
+    /**
+     * Creates a RowMapper for any class that uses CRUD field annotations.
+     * <p>
+     * Reuses the same mapping logic for DTOs, custom result classes, or joined queries.
+     * No @Table annotation required - only field-level annotations are used.
+     * </p>
+     *
+     * <h4>Example Usage:</h4>
+     * <pre>{@code
+     * // DTO class - NO necesita @Table!
+     * public class UsuarioDetalles {
+     *     @Column("user_name")
+     *     private String nombre;
+     *
+     *     @Column("role_name")
+     *     private String rol;
+     *
+     *     @JsonColumn
+     *     private Map<String, Object> metadata;
+     * }
+     *
+     * // En tu repositorio
+     * public List<UsuarioDetalles> findUserDetails() {
+     *     return jdbi.withHandle(handle ->
+     *         handle.createQuery("SELECT u.name as user_name, r.name as role_name, u.metadata FROM users u JOIN roles r ON u.role_id = r.id")
+     *         .map(getCustomRowMapper(UsuarioDetalles.class)) // ✅ Funciona sin @Table
+     *         .list()
+     *     );
+     * }
+     * }</pre>
+     *
+     * @param <T> the target class type
+     * @param targetClass the class to map results to (must have a no-arg constructor)
+     * @return a RowMapper instance for the target class
+     */
+    public <T> org.jdbi.v3.core.mapper.RowMapper<T> getCustomRowMapper(Class<T> targetClass) {
+        return (rs, ctx) -> mapRow(rs, targetClass);
+    }
+
+
 
     // ================================
     // AUTOMATIC SQL GENERATION
@@ -1100,12 +1140,34 @@ public abstract class CRUD<E, ID> {
             String operator = condition.getOperator().getSqlOperator();
             String placeholder = ":" + key;
 
-            if (condition.getOperator() == FilterOperator.LIKE || condition.getOperator() == FilterOperator.NOT_LIKE) {
-                placeholder = "CONCAT('%', :" + key + ", '%')";
-            } else if (condition.getOperator() == FilterOperator.STARTS_WITH) {
-                placeholder = "CONCAT(:" + key + ", '%')";
-            } else if (condition.getOperator() == FilterOperator.ENDS_WITH) {
-                placeholder = "CONCAT('%', :" + key + ")";
+            // Handle pattern-based operators
+            switch (condition.getOperator()) {
+                case LIKE:
+                case NOT_LIKE:
+                    // Use database-specific concatenation or parameter binding
+                    if (dialect == Dialect.POSTGRESQL) {
+                        placeholder = ":'" + key + "'"; // Let the binding handle the pattern
+                    } else {
+                        placeholder = "CONCAT('%', :" + key + ", '%')";
+                    }
+                    break;
+                case STARTS_WITH:
+                    if (dialect == Dialect.POSTGRESQL) {
+                        placeholder = ":'" + key + "'";
+                    } else {
+                        placeholder = "CONCAT(:" + key + ", '%')";
+                    }
+                    break;
+                case ENDS_WITH:
+                    if (dialect == Dialect.POSTGRESQL) {
+                        placeholder = ":'" + key + "'";
+                    } else {
+                        placeholder = "CONCAT('%', :" + key + ")";
+                    }
+                    break;
+                default:
+                    // For other operators, use direct parameter binding
+                    break;
             }
 
             whereConditions.add(columnName + " " + operator + " " + placeholder);
@@ -1128,46 +1190,42 @@ public abstract class CRUD<E, ID> {
      */
     private Field getFieldByName(String key) {
         try {
-            Field field = entityClass.getDeclaredField(key);
-
-            // Verify field is not ignored and is accessible
-            if (field.isAnnotationPresent(Ignore.class)) {
-                throw new IllegalArgumentException(
-                        "Field '" + key + "' is annotated with @Ignore and cannot be used for filtering"
-                );
-            }
-            if(field.isAnnotationPresent(JsonColumn.class)){
-                if(field.getType() != String.class){
-                    throw new IllegalArgumentException(
-                            "Field '" + key + "' is annotated with @JsonColumn and must be of type String for filtering"
-                    );
-                }
-            }
-            if(field.isAnnotationPresent(FileColumn.class)){
-                throw new IllegalArgumentException(
-                        "Field '" + key + "' is annotated with @FileColumn and cannot be used for filtering"
-                );
-            }
-
-            return field;
+            return validateField(entityClass.getDeclaredField(key));
         } catch (NoSuchFieldException e) {
+            // If not found, check if it has an operator suffix
             for (FilterOperator op : FilterOperator.values()) {
                 String suffix = "_" + op.name();
                 if (key.endsWith(suffix)) {
                     String fieldName = key.substring(0, key.length() - suffix.length());
                     try {
-                        Field field = entityClass.getDeclaredField(fieldName);
-                        if (field.isAnnotationPresent(Ignore.class)) {
-                            throw new IllegalArgumentException("Field '" + fieldName + "' is ignored.");
-                        }
-                        return field;
+                        return validateField(entityClass.getDeclaredField(fieldName));
                     } catch (NoSuchFieldException ex) {
-                        // Continuar con el siguiente operador
+                        // Continue to next operator
                     }
                 }
             }
         }
         throw new IllegalArgumentException("Field '" + key + "' does not exist in entity " + entityClass.getSimpleName());
+    }
+    private Field validateField(Field field) {
+        if (field.isAnnotationPresent(Ignore.class)) {
+            throw new IllegalArgumentException(
+                    "Field '" + field.getName() + "' is annotated with @Ignore and cannot be used for filtering"
+            );
+        }
+        if (field.isAnnotationPresent(JsonColumn.class)) {
+            if (field.getType() != String.class) {
+                throw new IllegalArgumentException(
+                        "Field '" + field.getName() + "' is annotated with @JsonColumn and must be of type String for filtering"
+                );
+            }
+        }
+        if (field.isAnnotationPresent(FileColumn.class)) {
+            throw new IllegalArgumentException(
+                    "Field '" + field.getName() + "' is annotated with @FileColumn and cannot be used for filtering"
+            );
+        }
+        return field;
     }
 
     /**
@@ -1179,15 +1237,25 @@ public abstract class CRUD<E, ID> {
      * @return a FilterCondition object
      */
     private FilterCondition parseFilterCondition(String key, Object value) {
-        // Verificar si la clave contiene un operador explícito
-        for (FilterOperator op : FilterOperator.values()) {
+        // Check for explicit operator suffixes (longest first to avoid partial matches)
+        List<FilterOperator> operators = Arrays.asList(FilterOperator.values());
+        operators.sort((a, b) -> Integer.compare(b.name().length(), a.name().length())); // Sort by length descending
+
+        for (FilterOperator op : operators) {
             String suffix = "_" + op.name();
             if (key.endsWith(suffix)) {
                 String fieldName = key.substring(0, key.length() - suffix.length());
-                return new FilterCondition(fieldName, op, value);
+                // Verify this is actually a field name and not a partial match
+                try {
+                    entityClass.getDeclaredField(fieldName);
+                    return new FilterCondition(fieldName, op, value);
+                } catch (NoSuchFieldException e) {
+                    // Not a valid field name, continue to next operator
+                }
             }
         }
-        // Si no tiene sufijo de operador, se asume EQUALS
+
+        // If no operator suffix found, assume EQUALS
         return new FilterCondition(key, FilterOperator.EQUALS, value);
     }
 
@@ -1209,9 +1277,25 @@ public abstract class CRUD<E, ID> {
 
             FilterCondition condition = parseFilterCondition(key, value);
             Field field = getFieldByName(condition.getFieldName());
-
-            // Para operadores LIKE, el valor se pasa tal cual; el SQL se encarga de agregar '%'
             Object processedValue = processFilterValue(field, value);
+
+            // Apply pattern formatting for LIKE operators
+            switch (condition.getOperator()) {
+                case LIKE:
+                case NOT_LIKE:
+                    processedValue = "%" + processedValue + "%";
+                    break;
+                case STARTS_WITH:
+                    processedValue = processedValue + "%";
+                    break;
+                case ENDS_WITH:
+                    processedValue = "%" + processedValue;
+                    break;
+                default:
+                    // No pattern modification for other operators
+                    break;
+            }
+
             query.bind(key, processedValue); // ¡Usamos la clave original 'key' como nombre del parámetro!
         }
     }
