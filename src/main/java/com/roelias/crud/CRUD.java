@@ -510,7 +510,20 @@ public abstract class CRUD<E, ID> {
             for (Field field : fields) {
                 if (!field.equals(idField) && !field.isAnnotationPresent(CreatedDate.class)) {
                     String columnName = getColumnName(field);
-                    setClauses.add(columnName + " = :" + field.getName());
+                    String placeholder = ":" + field.getName();
+
+                    if (dialect == Dialect.POSTGRESQL && field.isAnnotationPresent(JsonColumn.class)) {
+                        placeholder += "::jsonb";
+                    }
+
+                    if (dialect == Dialect.POSTGRESQL && field.isAnnotationPresent(UUID.class)) {
+                        UUID uuidAnnotation = field.getAnnotation(UUID.class);
+                        if (!uuidAnnotation.autoGenerate()) {
+                            placeholder += "::uuid";
+                        }
+                    }
+
+                    setClauses.add(columnName + " = " + placeholder);
                 }
             }
 
@@ -1031,94 +1044,6 @@ public abstract class CRUD<E, ID> {
                 handle.createUpdate("DELETE FROM " + tableName)
                         .execute()
         );
-    }
-
-    /**
-     * Saves an entity within a transaction with specified isolation level.
-     * <p>
-     * Useful when you need specific transaction isolation guarantees.
-     * </p>
-     *
-     * @param entity the entity to save
-     * @param isolation the transaction isolation level
-     * @return the primary key of the saved entity
-     */
-    public ID saveInTransaction(E entity, TransactionIsolationLevel isolation) {
-        return jdbi.inTransaction(isolation, handle -> {
-            Update update = handle.createUpdate(buildInsertSql());
-            bindInsertParameters(update, entity);
-            return update.executeAndReturnGeneratedKeys(getIdColumnName())
-                    .mapTo(getIdType())
-                    .one();
-        });
-    }
-
-    /**
-     * Saves multiple entities using batch processing for optimal performance.
-     * <p>
-     * This method is significantly faster than saveAll() for large datasets
-     * as it uses JDBI's batch processing capabilities.
-     * </p>
-     *
-     * @param entities the list of entities to save
-     */
-    public void saveAllBatch(List<E> entities) {
-        if (entities == null || entities.isEmpty()) {
-            return;
-        }
-
-        jdbi.inTransaction(handle -> {
-            String sql = buildInsertSql();
-            var batch = handle.prepareBatch(sql);
-
-            for (E entity : entities) {
-                bindBatchParameters(batch, entity);
-                batch.add();
-            }
-
-            batch.execute();
-            return null;
-        });
-    }
-
-    /**
-     * Executes custom logic within a transaction.
-     * <p>
-     * Provides access to the JDBI Handle for custom database operations
-     * while maintaining transaction boundaries.
-     * </p>
-     *
-     * <h4>Example:</h4>
-     * <pre>{@code
-     * String result = crud.executeInTransaction(handle -> {
-     *     // Custom SQL operations
-     *     handle.createUpdate("UPDATE users SET last_login = NOW()").execute();
-     *     return "Login updated";
-     * });
-     * }</pre>
-     *
-     * @param <T> the return type of the callback
-     * @param callback the transaction callback
-     * @return the result returned by the callback
-     */
-    public <T> T executeInTransaction(TransactionCallback<T> callback) {
-        return jdbi.inTransaction(callback::execute);
-    }
-
-    /**
-     * Functional interface for transaction callbacks.
-     *
-     * @param <T> the return type
-     */
-    @FunctionalInterface
-    public interface TransactionCallback<T> {
-        /**
-         * Executes custom logic within a transaction.
-         *
-         * @param handle the JDBI handle
-         * @return the result of the operation
-         */
-        T execute(org.jdbi.v3.core.Handle handle);
     }
 
     // ================================
