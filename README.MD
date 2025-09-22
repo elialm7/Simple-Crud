@@ -318,6 +318,37 @@ crud.executeInTransaction(handle -> {
 | `@UpdatedDate` | Update timestamp | None | `@UpdatedDate` |
 | `@Ignore` | Skip field | None | `@Ignore` |
 
+
+
+## 🗄️ Database Support Matrix
+
+| Database | Support Level | Driver | Auto-Generated IDs | Transactions | Recommended Version |
+|----------|---------------|--------|-------------------|-------------|-------------------|
+| **MySQL** | ✅ Full | `mysql-connector-java` | ✅ Yes | ✅ Full ACID | 8.0+ |
+| **PostgreSQL** | ✅ Full | `postgresql` | ✅ Yes | ✅ Full ACID | 12+ |
+| **MariaDB** | ✅ Full | `mariadb-java-client` | ✅ Yes | ✅ Full ACID | 10.5+ |
+| **Oracle** | ✅ Full | `ojdbc` | ✅ Yes | ✅ Full ACID | 19c+ |
+| **SQL Server** | ✅ Full | `mssql-jdbc` | ✅ Yes | ✅ Full ACID | 2019+ |
+| **DB2** | ✅ Full | `db2jcc` | ✅ Yes | ✅ Full ACID | 11.5+ |
+| **SQLite** | ⚠️ Partial | `sqlite-jdbc` | ⚠️ Manual* | ✅ Transactions | 3.35+ |
+| **H2** | ⚠️ Partial | `h2` | ✅ Yes | ✅ Full ACID | 2.1+ |
+| **HSQLDB** | ⚠️ Limited | `hsqldb` | ✅ Yes | ✅ Full ACID | 2.6+ |
+| **Apache Derby** | ❌ Not Supported | `derby` | ⚠️ Limited | ✅ Transactions | 10.15+ |
+| **Firebird** | ❌ Not Supported | `jaybird` | ⚠️ Limited | ✅ Transactions | 4.0+ |
+| **Informix** | ❌ Not Supported | `informix-jdbc` | ⚠️ Limited | ✅ Transactions | 14.10+ |
+
+### 📋 Legend:
+- **✅ Full**: Complete support with all features
+- **⚠️ Partial**: Most features supported, may require workarounds
+- **⚠️ Limited**: Basic functionality only
+- **❌ Not Supported**: Not recommended, significant limitations
+
+### 🔧 Notes:
+- *SQLite requires manual handling of auto-generated IDs using `last_insert_rowid()`
+- All supported databases provide full transaction support
+- JSON column support requires database-native JSON capabilities (PostgreSQL, MySQL 5.7+)
+- Array column support varies by database native array support
+
 ## Data Type Handling
 
 ### Complete Type Mapping

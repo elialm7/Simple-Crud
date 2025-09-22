@@ -359,7 +359,6 @@ public abstract class CRUD<E, ID> {
     private static final Map<Class<?>, Field> idFieldCache = new ConcurrentHashMap<>();
     private static final Map<Class<?>, String> insertSqlCache = new ConcurrentHashMap<>();
     private static final Map<Class<?>, String> updateSqlCache = new ConcurrentHashMap<>();
-
     /**
      * Creates a new CRUD instance for the specified entity.
      * <p>
@@ -430,6 +429,8 @@ public abstract class CRUD<E, ID> {
     protected org.jdbi.v3.core.mapper.RowMapper<E> getRowMapper() {
         return BeanMapper.of(entityClass);
     }
+
+
 
     // ================================
     // AUTOMATIC SQL GENERATION
