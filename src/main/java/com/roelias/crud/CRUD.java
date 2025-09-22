@@ -1,5 +1,7 @@
 package com.roelias.crud;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.core.mapper.reflect.BeanMapper;
@@ -13,6 +15,9 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -70,11 +75,17 @@ public abstract class CRUD<E, ID> {
     protected final String tableName;
     private final Class<E> entityClass;
     private final Class<ID> idType;
+    private Dialect dialect;
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
     // ================================
     // ANNOTATIONS
     // ================================
+
+    public enum Dialect{
+        MYSQL,
+        POSTGRESQL
+    }
 
     /**
      * Marks a class as a database table entity.
@@ -99,6 +110,8 @@ public abstract class CRUD<E, ID> {
          * @return schema name, empty string if not specified
          */
         String schema() default "";
+
+        Dialect dialect() default Dialect.MYSQL;
     }
 
     /**
@@ -394,8 +407,10 @@ public abstract class CRUD<E, ID> {
 
             String schema = tableAnnotation.schema();
             String table = tableAnnotation.value();
+            dialect = tableAnnotation.dialect();
             return schema.isEmpty() ? table : schema + "." + table;
         });
+
     }
 
     /**
@@ -427,7 +442,8 @@ public abstract class CRUD<E, ID> {
      * @return the row mapper for this entity type
      */
     protected org.jdbi.v3.core.mapper.RowMapper<E> getRowMapper() {
-        return BeanMapper.of(entityClass);
+      //  return BeanMapper.of(entityClass);
+         return (rs, ctx) -> mapRow(rs, entityClass);
     }
 
 
@@ -455,7 +471,20 @@ public abstract class CRUD<E, ID> {
             for (Field field : fields) {
                 String columnName = getColumnName(field);
                 columns.add(columnName);
-                placeholders.add(":" + field.getName());
+                String placeholder = ":" + field.getName();
+
+                // Si el dialecto es PostgreSQL y es un JSON column, agregamos ::jsonb
+                if (dialect == Dialect.POSTGRESQL && field.isAnnotationPresent(JsonColumn.class)) {
+                    placeholder += "::jsonb";
+                }
+                if(dialect == Dialect.POSTGRESQL && field.isAnnotationPresent(UUID.class)) {
+                    UUID uuidAnnotation = field.getAnnotation(UUID.class);
+                    if(!uuidAnnotation.autoGenerate()){
+                        placeholder += "::uuid";
+                    }
+                }
+
+                placeholders.add(placeholder);
             }
 
             return "INSERT INTO " + tableName + " (" + columns + ") VALUES (" + placeholders + ")";
@@ -609,8 +638,12 @@ public abstract class CRUD<E, ID> {
 
                         if (currentValue == null) {
                             UUID uuidAnnotation = field.getAnnotation(UUID.class);
-                            if (uuidAnnotation.autoGenerate() && field.getType() == String.class) {
-                                field.set(entity, java.util.UUID.randomUUID().toString());
+                            if (uuidAnnotation.autoGenerate()) {
+                                if(field.getType() == String.class){
+                                    field.set(entity, java.util.UUID.randomUUID().toString());
+                                }else if(field.getType() == java.util.UUID.class){
+                                    field.set(entity, java.util.UUID.randomUUID());
+                                }
                             }
                         }
                     } catch (IllegalAccessException e) {
@@ -1113,4 +1146,106 @@ public abstract class CRUD<E, ID> {
         // Add more types as needed
         return value;
     }
+
+    public <E> E mapRow(ResultSet rs, Class<E> entityClass) throws SQLException {
+        try {
+            E entity = entityClass.getDeclaredConstructor().newInstance();
+
+            for (Field field : entityClass.getDeclaredFields()) {
+                if (field.isAnnotationPresent(Ignore.class)) continue;
+
+                field.setAccessible(true);
+                String columnName = getColumnName(field); // Tu método que obtiene el nombre real de columna
+
+                Object value = null;
+
+                if (field.isAnnotationPresent(UUID.class)) {
+                    if (dialect == Dialect.POSTGRESQL) {
+                        value = rs.getObject(columnName, java.util.UUID.class);
+                        if(value != null && field.getType() == String.class){
+                            value = value.toString();
+                        }
+                    } else {
+                        value = rs.getString(columnName);
+                    }
+                } else if (field.isAnnotationPresent(JsonColumn.class)) {
+                    String json = rs.getString(columnName);
+                    if (json != null) {
+                        Class<?> fieldType = field.getType();
+                        if (Map.class.isAssignableFrom(fieldType)) {
+                            value = new ObjectMapper().readValue(json, new TypeReference<Map<String,Object>>() {});
+                        } else if (JsonNode.class.isAssignableFrom(fieldType)) {
+                            value = new ObjectMapper().readTree(json);
+                        } else {
+                            value = new ObjectMapper().readValue(json, fieldType);
+                        }
+                    }
+                } else if (field.isAnnotationPresent(ArrayColumn.class)) {
+                    ArrayColumn arrayAnno = field.getAnnotation(ArrayColumn.class);
+                    String[] array = Optional.ofNullable(rs.getString(columnName)).orElse("").split(arrayAnno.separator());
+                    if (List.class.isAssignableFrom(field.getType())) {
+                        value = Arrays.asList(array);
+                    } else if (field.getType().isArray()) {
+                        value = array;
+                    }
+                } else if (field.isAnnotationPresent(EnumColumn.class)) {
+                    EnumColumn enumAnno = field.getAnnotation(EnumColumn.class);
+                    String raw = rs.getString(columnName);
+                    if (raw != null) {
+                        value = mapEnum(field.getType(), raw, enumAnno.value());
+                    }
+                } else if (field.isAnnotationPresent(FileColumn.class)) {
+                    value = rs.getBytes(columnName);
+                } else if (field.getType().equals(LocalDateTime.class)) {
+                    Timestamp ts = rs.getTimestamp(columnName);
+                    if (ts != null) value = ts.toLocalDateTime();
+                } else {
+                    value = rs.getObject(columnName);
+                }
+
+                // Aplicar default si null
+                if (value == null && field.isAnnotationPresent(Default.class)) {
+                    Default def = field.getAnnotation(Default.class);
+                    value = parseDefaultValue(def.value(), field.getType());
+                }
+
+                field.set(entity, value);
+            }
+
+            return entity;
+
+        } catch (Exception e) {
+            throw new RuntimeException("Error mapping ResultSet to " + entityClass.getSimpleName(), e);
+        }
+    }
+
+    private Object mapEnum(Class<?> enumClass, String raw, EnumColumn.EnumType type) {
+        Object[] constants = enumClass.getEnumConstants();
+        switch (type) {
+            case STRING:
+                for (Object c : constants) if (((Enum<?>) c).name().equals(raw)) return c;
+                break;
+            case ORDINAL:
+                int idx = Integer.parseInt(raw);
+                return constants[idx];
+            case CODE:
+                for (Object c : constants) {
+                    try {
+                        Method getCode = c.getClass().getMethod("getCode");
+                        if (getCode.invoke(c).toString().equals(raw)) return c;
+                    } catch (Exception ignored) {}
+                }
+                break;
+        }
+        return null;
+    }
+
+    private Object parseDefaultValue(String def, Class<?> type) {
+        if (type.equals(String.class)) return def;
+        if (type.equals(Boolean.class) || type.equals(boolean.class)) return Boolean.parseBoolean(def);
+        if (type.equals(Integer.class) || type.equals(int.class)) return Integer.parseInt(def);
+        if (type.equals(Long.class) || type.equals(long.class)) return Long.parseLong(def);
+        return null;
+    }
+
 }
