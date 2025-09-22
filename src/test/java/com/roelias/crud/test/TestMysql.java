@@ -1,6 +1,7 @@
 package com.roelias.crud.test;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.roelias.crud.CRUD;
 import com.roelias.crud.entities.*;
 import com.roelias.crud.repositories.MysqlRepository;
 import com.roelias.crud.repositories.PostgresqlRepository;
@@ -22,6 +23,7 @@ public class TestMysql {
     static void setupDatabase(){
         Jdbi jdbi = Jdbi.create("jdbc:mysql://localhost:3306/test_crud", "root", "admin");
         repository = new MysqlRepository(jdbi);
+        CRUD.setDebugMode(true);
     }
 
 
@@ -317,6 +319,22 @@ public class TestMysql {
     void testNull(){
         List<TestUserMysql> users = repository.findAll(Map.of(
                 "id_IS_NULL",""
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+
+    @Test
+    void test_nomenclature(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "created_at_BETWEEN","2025-09-21 23:00:00,2025-09-22 23:59:59",
+                "preferences_IS_NOT_NULL",true
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+    @Test
+    void testIsnull(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "preferences_IS_NULL",true
         ));
         users.forEach(u -> System.out.println("Found User: " + u.getName()));
     }

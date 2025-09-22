@@ -7,6 +7,9 @@ import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.core.statement.PreparedBatch;
 import org.jdbi.v3.core.statement.Query;
 import org.jdbi.v3.core.statement.Update;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -75,7 +78,6 @@ public abstract class CRUD<E, ID> {
     private final Class<ID> idType;
     private Dialect dialect;
     private static final ObjectMapper objectMapper = new ObjectMapper();
-
     // ================================
     // ANNOTATIONS
     // ================================
@@ -440,7 +442,6 @@ public abstract class CRUD<E, ID> {
      * @return the row mapper for this entity type
      */
     protected org.jdbi.v3.core.mapper.RowMapper<E> getRowMapper() {
-      //  return BeanMapper.of(entityClass);
          return (rs, ctx) -> mapRow(rs, entityClass);
     }
 
@@ -1075,7 +1076,6 @@ public abstract class CRUD<E, ID> {
         return jdbi.withHandle(handle -> {
             String whereClause = buildWhereClause(filters);
             String sql = "SELECT 1 FROM " + tableName + whereClause + " LIMIT 1";
-
             var query = handle.createQuery(sql);
             bindFilterParameters(query, filters);
 
@@ -1096,7 +1096,6 @@ public abstract class CRUD<E, ID> {
             String whereClause = buildWhereClause(filters);
             String orderClause = buildOrderClause(sortBy, ascending);
             String sql = "SELECT * FROM " + tableName + whereClause + orderClause;
-
             var query = handle.createQuery(sql);
 
             bindFilterParameters(query, filters);
@@ -1228,23 +1227,20 @@ public abstract class CRUD<E, ID> {
      * @throws IllegalArgumentException if field doesn't exist
      */
     private Field getFieldByName(String key) {
+        // Extraer el nombre del campo (sin operador)
+        String fieldName = extractFieldNameFromKey(key);
+
+        // Normalizar el nombre del campo (snake_case <-> camelCase)
+        String normalizedFieldName = normalizeFieldName(fieldName);
+
         try {
-            return validateField(entityClass.getDeclaredField(key));
+            return validateField(entityClass.getDeclaredField(normalizedFieldName));
         } catch (NoSuchFieldException e) {
-            // If not found, check if it has an operator suffix
-            for (FilterOperator op : FilterOperator.values()) {
-                String suffix = "_" + op.name();
-                if (key.endsWith(suffix)) {
-                    String fieldName = key.substring(0, key.length() - suffix.length());
-                    try {
-                        return validateField(entityClass.getDeclaredField(fieldName));
-                    } catch (NoSuchFieldException ex) {
-                        // Continue to next operator
-                    }
-                }
-            }
+            throw new IllegalArgumentException(
+                    "Field '" + fieldName + "' does not exist in entity " + entityClass.getSimpleName() +
+                            ". Tried variations: " + fieldName + ", " + snakeToCamelCase(fieldName) + ", " + camelToSnakeCase(fieldName)
+            );
         }
-        throw new IllegalArgumentException("Field '" + key + "' does not exist in entity " + entityClass.getSimpleName());
     }
     private Field validateField(Field field) {
         if (field.isAnnotationPresent(Ignore.class)) {
@@ -1252,21 +1248,146 @@ public abstract class CRUD<E, ID> {
                     "Field '" + field.getName() + "' is annotated with @Ignore and cannot be used for filtering"
             );
         }
-        if (field.isAnnotationPresent(JsonColumn.class)) {
-            if (field.getType() != String.class) {
-                throw new IllegalArgumentException(
-                        "Field '" + field.getName() + "' is annotated with @JsonColumn and must be of type String for filtering"
-                );
-            }
-        }
-        if (field.isAnnotationPresent(FileColumn.class)) {
-            throw new IllegalArgumentException(
-                    "Field '" + field.getName() + "' is annotated with @FileColumn and cannot be used for filtering"
-            );
-        }
         return field;
     }
 
+    /**
+     * Valida si un campo puede usar un operador específico
+     */
+    private void validateFieldForOperator(Field field, FilterOperator operator) {
+        // JSON columns: solo IS_NULL, IS_NOT_NULL, y EQUALS
+        if (field.isAnnotationPresent(JsonColumn.class)) {
+            Set<FilterOperator> allowedForJson = Set.of(
+                    FilterOperator.IS_NULL,
+                    FilterOperator.IS_NOT_NULL,
+                    FilterOperator.EQUALS
+            );
+            if (!allowedForJson.contains(operator)) {
+                throw new IllegalArgumentException(
+                        "Field '" + field.getName() + "' with @JsonColumn only supports IS_NULL, IS_NOT_NULL, and EQUALS operations"
+                );
+            }
+        }
+
+        // File columns: solo IS_NULL e IS_NOT_NULL
+        if (field.isAnnotationPresent(FileColumn.class)) {
+            Set<FilterOperator> allowedForFile = Set.of(
+                    FilterOperator.IS_NULL,
+                    FilterOperator.IS_NOT_NULL
+            );
+            if (!allowedForFile.contains(operator)) {
+                throw new IllegalArgumentException(
+                        "Field '" + field.getName() + "' with @FileColumn only supports IS_NULL and IS_NOT_NULL operations"
+                );
+            }
+        }
+    }
+
+    /**
+     * Convierte diferentes nomenclaturas a nombre de campo Java
+     */
+    private String normalizeFieldName(String fieldName) {
+        // Primero intentar el nombre tal como viene
+        try {
+            entityClass.getDeclaredField(fieldName);
+            return fieldName;
+        } catch (NoSuchFieldException e) {
+            // Si no existe, intentar conversiones
+        }
+
+        // Convertir snake_case a camelCase
+        if (fieldName.contains("_")) {
+            String camelCase = snakeToCamelCase(fieldName);
+            try {
+                entityClass.getDeclaredField(camelCase);
+                return camelCase;
+            } catch (NoSuchFieldException e) {
+                // Continuar con otras conversiones
+            }
+        }
+
+        // Convertir camelCase a snake_case
+        String snakeCase = camelToSnakeCase(fieldName);
+        try {
+            entityClass.getDeclaredField(snakeCase);
+            return snakeCase;
+        } catch (NoSuchFieldException e) {
+            // No se encontró ninguna variación
+        }
+
+        return fieldName; // Devolver original si no se encuentra
+    }
+
+    /**
+     * Convierte snake_case a camelCase
+     */
+    private String snakeToCamelCase(String snakeCase) {
+        StringBuilder result = new StringBuilder();
+        boolean capitalizeNext = false;
+
+        for (char c : snakeCase.toCharArray()) {
+            if (c == '_') {
+                capitalizeNext = true;
+            } else if (capitalizeNext) {
+                result.append(Character.toUpperCase(c));
+                capitalizeNext = false;
+            } else {
+                result.append(Character.toLowerCase(c));
+            }
+        }
+
+        return result.toString();
+    }
+
+    /**
+     * Convierte camelCase a snake_case
+     */
+    private String camelToSnakeCase(String camelCase) {
+        StringBuilder result = new StringBuilder();
+
+        for (int i = 0; i < camelCase.length(); i++) {
+            char c = camelCase.charAt(i);
+            if (Character.isUpperCase(c)) {
+                if (i > 0) {
+                    result.append('_');
+                }
+                result.append(Character.toLowerCase(c));
+            } else {
+                result.append(c);
+            }
+        }
+
+        return result.toString();
+    }
+
+    /**
+     * Extrae el nombre del campo de una clave que puede tener operador
+     */
+    private String extractFieldNameFromKey(String key) {
+        // Verificar operadores de nulidad primero (más específicos)
+        if (key.endsWith("_IS_NOT_NULL")) {
+            return key.substring(0, key.length() - "_IS_NOT_NULL".length());
+        }
+        if (key.endsWith("_IS_NULL")) {
+            return key.substring(0, key.length() - "_IS_NULL".length());
+        }
+
+        // Verificar otros operadores (ordenados por longitud descendente)
+        List<FilterOperator> operators = Arrays.asList(FilterOperator.values());
+        operators.sort((a, b) -> Integer.compare(b.name().length(), a.name().length()));
+
+        for (FilterOperator op : operators) {
+            if (op == FilterOperator.IS_NULL || op == FilterOperator.IS_NOT_NULL) {
+                continue; // Ya verificados arriba
+            }
+            String suffix = "_" + op.name();
+            if (key.endsWith(suffix)) {
+                return key.substring(0, key.length() - suffix.length());
+            }
+        }
+
+        return key; // Sin operador
+    }
     /**
      * Parses a filter key and value into a FilterCondition.
      * Supports format: "fieldName" (implies EQUALS) or "fieldName_OPERATOR" (e.g., "age_GT").
@@ -1276,53 +1397,66 @@ public abstract class CRUD<E, ID> {
      * @return a FilterCondition object
      */
     private FilterCondition parseFilterCondition(String key, Object value) {
+        String fieldName = extractFieldNameFromKey(key);
+        String normalizedFieldName = normalizeFieldName(fieldName);
+
         // Manejar IS_NULL/IS_NOT_NULL primero
         if (key.endsWith("_IS_NULL")) {
-            String fieldName = key.substring(0, key.length() - "_IS_NULL".length());
             try {
-                entityClass.getDeclaredField(fieldName);
-                return new FilterCondition(fieldName, FilterOperator.IS_NULL, null);
+                Field field = entityClass.getDeclaredField(normalizedFieldName);
+                validateFieldForOperator(field, FilterOperator.IS_NULL);
+                return new FilterCondition(normalizedFieldName, FilterOperator.IS_NULL, null);
             } catch (NoSuchFieldException e) {
-                // Continuar con lógica normal
+                throw new IllegalArgumentException("Field '" + fieldName + "' does not exist in entity " + entityClass.getSimpleName());
             }
         }
 
         if (key.endsWith("_IS_NOT_NULL")) {
-            String fieldName = key.substring(0, key.length() - "_IS_NOT_NULL".length());
             try {
-                entityClass.getDeclaredField(fieldName);
-                return new FilterCondition(fieldName, FilterOperator.IS_NOT_NULL, null);
+                Field field = entityClass.getDeclaredField(normalizedFieldName);
+                validateFieldForOperator(field, FilterOperator.IS_NOT_NULL);
+                return new FilterCondition(normalizedFieldName, FilterOperator.IS_NOT_NULL, null);
             } catch (NoSuchFieldException e) {
-                // Continuar con lógica normal
+                throw new IllegalArgumentException("Field '" + fieldName + "' does not exist in entity " + entityClass.getSimpleName());
             }
         }
 
-        // Check for explicit operator suffixes (longest first to avoid partial matches)
+        // Verificar otros operadores
         List<FilterOperator> operators = Arrays.asList(FilterOperator.values());
         operators.sort((a, b) -> Integer.compare(b.name().length(), a.name().length()));
 
         for (FilterOperator op : operators) {
+            if (op == FilterOperator.IS_NULL || op == FilterOperator.IS_NOT_NULL) {
+                continue; // Ya verificados arriba
+            }
+
             String suffix = "_" + op.name();
             if (key.endsWith(suffix)) {
-                String fieldName = key.substring(0, key.length() - suffix.length());
                 try {
-                    entityClass.getDeclaredField(fieldName);
+                    Field field = entityClass.getDeclaredField(normalizedFieldName);
+                    validateFieldForOperator(field, op);
 
                     // Manejar BETWEEN que necesita 2 valores
                     if (op == FilterOperator.BETWEEN) {
                         Object[] values = parseBetweenValue(value);
-                        return new FilterCondition(fieldName, op, values[0], values[1]);
+                        return new FilterCondition(normalizedFieldName, op, values[0], values[1]);
                     }
 
-                    return new FilterCondition(fieldName, op, value);
+                    return new FilterCondition(normalizedFieldName, op, value);
                 } catch (NoSuchFieldException e) {
-                    // Not a valid field name, continue to next operator
+                    throw new IllegalArgumentException("Field '" + fieldName + "' does not exist in entity " + entityClass.getSimpleName());
                 }
             }
         }
 
-        // If no operator suffix found, assume EQUALS
-        return new FilterCondition(key, FilterOperator.EQUALS, value);
+        // Si no hay operador, asumir EQUALS
+        try {
+            Field field = entityClass.getDeclaredField(normalizedFieldName);
+            validateFieldForOperator(field, FilterOperator.EQUALS);
+            return new FilterCondition(normalizedFieldName, FilterOperator.EQUALS, value);
+        } catch (NoSuchFieldException e) {
+            throw new IllegalArgumentException("Field '" + fieldName + "' does not exist in entity " + entityClass.getSimpleName());
+        }
     }
 
     private Object[] parseBetweenValue(Object value) {
@@ -1624,12 +1758,14 @@ public abstract class CRUD<E, ID> {
      * @return true if entity exists, false otherwise
      */
     public boolean existsById(ID id) {
-        return jdbi.withHandle(handle ->
-                handle.createQuery("SELECT 1 FROM " + tableName + " WHERE " + getIdColumnName() + " = :id LIMIT 1")
-                        .bind("id", id)
-                        .mapTo(Integer.class)
-                        .findOne()
-                        .isPresent()
+        return jdbi.withHandle(handle -> {
+                    String sql = "SELECT 1 FROM " + tableName + " WHERE " + getIdColumnName() + " = :id LIMIT 1";
+                   return  handle.createQuery(sql)
+                            .bind("id", id)
+                            .mapTo(Integer.class)
+                            .findOne()
+                            .isPresent();
+                }
         );
     }
 
@@ -1646,7 +1782,8 @@ public abstract class CRUD<E, ID> {
      */
     public ID save(E entity) {
         return jdbi.inTransaction(handle -> {
-            Update update = handle.createUpdate(buildInsertSql());
+            String sql = buildInsertSql();
+            Update update = handle.createUpdate(sql);
             bindInsertParameters(update, entity);
 
             Field idField = getIdField();
@@ -1705,7 +1842,8 @@ public abstract class CRUD<E, ID> {
      */
     public boolean update(E entity) {
         return jdbi.inTransaction(handle -> {
-            Update update = handle.createUpdate(buildUpdateSql());
+            String sql = buildUpdateSql();
+            Update update = handle.createUpdate(sql);
             bindUpdateParameters(update, entity);
             return update.execute() > 0;
         });
@@ -1718,10 +1856,12 @@ public abstract class CRUD<E, ID> {
      * @return true if the entity was deleted, false if no matching record was found
      */
     public boolean deleteById(ID id) {
-        return jdbi.inTransaction(handle ->
-                handle.createUpdate("DELETE FROM " + tableName + " WHERE " + getIdColumnName() + " = :id")
-                        .bind("id", id)
-                        .execute() > 0
+        return jdbi.inTransaction(handle ->{
+                    String sql = "DELETE FROM " + tableName + " WHERE " + getIdColumnName() + " = :id";
+                    return handle.createUpdate(sql)
+                            .bind("id", id)
+                            .execute() > 0;
+                }
         );
     }
 
@@ -1734,10 +1874,13 @@ public abstract class CRUD<E, ID> {
      * @return the number of deleted records
      */
     public int deleteAll() {
-        return jdbi.inTransaction(handle ->
-                handle.createUpdate("DELETE FROM " + tableName)
-                        .execute()
+        return jdbi.inTransaction(handle ->{
+                    String sql = "DELETE FROM " + tableName;
+                    return  handle.createUpdate(sql)
+                            .execute();
+                }
         );
+
     }
 
     // ================================
@@ -1774,7 +1917,7 @@ public abstract class CRUD<E, ID> {
                 if (field.isAnnotationPresent(Ignore.class)) continue;
 
                 field.setAccessible(true);
-                String columnName = getColumnName(field); // Tu método que obtiene el nombre real de columna
+                String columnName = getColumnName(field);
 
                 Object value = null;
 
