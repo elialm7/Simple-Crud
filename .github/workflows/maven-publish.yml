@@ -1,0 +1,26 @@
+name: Publish package to GitHub Packages
+
+# Solo se ejecuta en push a la rama release
+on:
+  push:
+    branches:
+      - release
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions: 
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-java@v3
+        with:
+          java-version: '21'
+          distribution: 'temurin'  # adopt ya no se usa, ahora se recomienda temurin
+
+      - name: Publish package
+        run: mvn --batch-mode deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.JAVA_TOKEN }}
