@@ -918,7 +918,12 @@ public abstract class CRUD<E, ID> {
         LIKE("LIKE"),
         NOT_LIKE("NOT LIKE"),
         STARTS_WITH("LIKE"),  // Usa LIKE en SQL, pero con patrón 'value%'
-        ENDS_WITH("LIKE");
+        ENDS_WITH("LIKE"),
+        IN("IN"),           // Nuevo
+        NOT_IN("NOT IN"),   // Nuevo
+        BETWEEN("BETWEEN"), // Nuevo
+        IS_NULL("IS NULL"), // Nuevo
+        IS_NOT_NULL("IS NOT NULL");
         private final String sqlOperator;
 
         FilterOperator(String sqlOperator) {
@@ -934,11 +939,21 @@ public abstract class CRUD<E, ID> {
         private final String fieldName;
         private final FilterOperator operator;
         private final Object value;
+        private final Object secondValue; // Para BETWEEN
 
         public FilterCondition(String fieldName, FilterOperator operator, Object value) {
             this.fieldName = fieldName;
             this.operator = operator;
             this.value = value;
+            this.secondValue  = null;
+        }
+
+
+        public FilterCondition(String fieldName, FilterOperator operator, Object value, Object secondValue) {
+            this.fieldName = fieldName;
+            this.operator = operator;
+            this.value = value;
+            this.secondValue = secondValue;
         }
 
         public String getFieldName() {
@@ -951,6 +966,10 @@ public abstract class CRUD<E, ID> {
 
         public Object getValue() {
             return value;
+        }
+
+        public Object getSecondValue() {
+            return secondValue;
         }
     }
 
@@ -1137,40 +1156,8 @@ public abstract class CRUD<E, ID> {
             Field field = getFieldByName(condition.getFieldName());
             String columnName = getColumnName(field);
 
-            String operator = condition.getOperator().getSqlOperator();
-            String placeholder = ":" + key;
-
-            // Handle pattern-based operators
-            switch (condition.getOperator()) {
-                case LIKE:
-                case NOT_LIKE:
-                    // Use database-specific concatenation or parameter binding
-                    if (dialect == Dialect.POSTGRESQL) {
-                        placeholder = ":'" + key + "'"; // Let the binding handle the pattern
-                    } else {
-                        placeholder = "CONCAT('%', :" + key + ", '%')";
-                    }
-                    break;
-                case STARTS_WITH:
-                    if (dialect == Dialect.POSTGRESQL) {
-                        placeholder = ":'" + key + "'";
-                    } else {
-                        placeholder = "CONCAT(:" + key + ", '%')";
-                    }
-                    break;
-                case ENDS_WITH:
-                    if (dialect == Dialect.POSTGRESQL) {
-                        placeholder = ":'" + key + "'";
-                    } else {
-                        placeholder = "CONCAT('%', :" + key + ")";
-                    }
-                    break;
-                default:
-                    // For other operators, use direct parameter binding
-                    break;
-            }
-
-            whereConditions.add(columnName + " " + operator + " " + placeholder);
+            String conditionSql = buildConditionSql(key, columnName, condition);
+            whereConditions.add(conditionSql);
         }
 
         if (whereConditions.length() == 0) {
@@ -1179,6 +1166,58 @@ public abstract class CRUD<E, ID> {
 
         return " WHERE " + whereConditions.toString();
 
+    }
+
+    /**
+     * Construye SQL para una condición individual
+     */
+    private String buildConditionSql(String key, String columnName, FilterCondition condition) {
+        String operator = condition.getOperator().getSqlOperator();
+
+        switch (condition.getOperator()) {
+            case IN:
+            case NOT_IN:
+                // Necesitamos saber cuántos valores hay para generar los placeholders
+                return buildInConditionSql(key, columnName, operator, condition.getValue());
+
+            case BETWEEN:
+                return columnName + " " + operator + " :" + key + "_min AND :" + key + "_max";
+
+            case IS_NULL:
+            case IS_NOT_NULL:
+                return columnName + " " + operator;
+
+            case LIKE:
+            case NOT_LIKE:
+                return columnName + " " + operator + " " + buildLikePlaceholder(key);
+
+            case STARTS_WITH:
+                return columnName + " LIKE " + buildLikePlaceholder(key);
+
+            case ENDS_WITH:
+                return columnName + " LIKE " + buildLikePlaceholder(key);
+
+            default:
+                return columnName + " " + operator + " :" + key;
+        }
+    }
+
+    private String buildInConditionSql(String key, String columnName, String operator, Object value) {
+        List<?> values = parseInValue(value);
+
+        StringJoiner placeholders = new StringJoiner(", ");
+        for (int i = 0; i < values.size(); i++) {
+            placeholders.add(":" + key + "_" + i);
+        }
+
+        return columnName + " " + operator + " (" + placeholders.toString() + ")";
+    }
+    private String buildLikePlaceholder(String key) {
+        if (dialect == Dialect.POSTGRESQL) {
+            return ":" + key;
+        } else {
+            return "CONCAT('%', :" + key + ", '%')";
+        }
     }
 
     /**
@@ -1237,17 +1276,44 @@ public abstract class CRUD<E, ID> {
      * @return a FilterCondition object
      */
     private FilterCondition parseFilterCondition(String key, Object value) {
+        // Manejar IS_NULL/IS_NOT_NULL primero
+        if (key.endsWith("_IS_NULL")) {
+            String fieldName = key.substring(0, key.length() - "_IS_NULL".length());
+            try {
+                entityClass.getDeclaredField(fieldName);
+                return new FilterCondition(fieldName, FilterOperator.IS_NULL, null);
+            } catch (NoSuchFieldException e) {
+                // Continuar con lógica normal
+            }
+        }
+
+        if (key.endsWith("_IS_NOT_NULL")) {
+            String fieldName = key.substring(0, key.length() - "_IS_NOT_NULL".length());
+            try {
+                entityClass.getDeclaredField(fieldName);
+                return new FilterCondition(fieldName, FilterOperator.IS_NOT_NULL, null);
+            } catch (NoSuchFieldException e) {
+                // Continuar con lógica normal
+            }
+        }
+
         // Check for explicit operator suffixes (longest first to avoid partial matches)
         List<FilterOperator> operators = Arrays.asList(FilterOperator.values());
-        operators.sort((a, b) -> Integer.compare(b.name().length(), a.name().length())); // Sort by length descending
+        operators.sort((a, b) -> Integer.compare(b.name().length(), a.name().length()));
 
         for (FilterOperator op : operators) {
             String suffix = "_" + op.name();
             if (key.endsWith(suffix)) {
                 String fieldName = key.substring(0, key.length() - suffix.length());
-                // Verify this is actually a field name and not a partial match
                 try {
                     entityClass.getDeclaredField(fieldName);
+
+                    // Manejar BETWEEN que necesita 2 valores
+                    if (op == FilterOperator.BETWEEN) {
+                        Object[] values = parseBetweenValue(value);
+                        return new FilterCondition(fieldName, op, values[0], values[1]);
+                    }
+
                     return new FilterCondition(fieldName, op, value);
                 } catch (NoSuchFieldException e) {
                     // Not a valid field name, continue to next operator
@@ -1257,6 +1323,30 @@ public abstract class CRUD<E, ID> {
 
         // If no operator suffix found, assume EQUALS
         return new FilterCondition(key, FilterOperator.EQUALS, value);
+    }
+
+    private Object[] parseBetweenValue(Object value) {
+        if (value instanceof String) {
+            String strValue = (String) value;
+            String[] parts = strValue.split("\\s*,\\s*");
+            if (parts.length == 2) {
+                return new Object[]{parts[0], parts[1]};
+            }
+            throw new IllegalArgumentException("BETWEEN value must be in format 'value1,value2'");
+        } else if (value instanceof List) {
+            List<?> list = (List<?>) value;
+            if (list.size() == 2) {
+                return new Object[]{list.get(0), list.get(1)};
+            }
+            throw new IllegalArgumentException("BETWEEN value must contain exactly 2 elements");
+        } else if (value instanceof Object[]) {
+            Object[] array = (Object[]) value;
+            if (array.length == 2) {
+                return array;
+            }
+            throw new IllegalArgumentException("BETWEEN value must contain exactly 2 elements");
+        }
+        throw new IllegalArgumentException("BETWEEN value must be String 'value1,value2', List, or Array with 2 elements");
     }
 
     /**
@@ -1270,33 +1360,141 @@ public abstract class CRUD<E, ID> {
             String key = entry.getKey();
             Object value = entry.getValue();
 
-            // Ignorar palabras reservadas
             if (RESERVED_KEYWORDS.contains(key)) {
                 continue;
             }
 
             FilterCondition condition = parseFilterCondition(key, value);
             Field field = getFieldByName(condition.getFieldName());
-            Object processedValue = processFilterValue(field, value);
 
-            // Apply pattern formatting for LIKE operators
             switch (condition.getOperator()) {
+                case IN:
+                case NOT_IN:
+                    bindInParameters(query, key, field, value);
+                    break;
+
+                case BETWEEN:
+                    bindBetweenParameters(query, key, field, condition);
+                    break;
+
+                case IS_NULL:
+                case IS_NOT_NULL:
+                    // No binding needed for NULL checks
+                    break;
+
                 case LIKE:
                 case NOT_LIKE:
-                    processedValue = "%" + processedValue + "%";
+                    Object processedValue = processFilterValue(field, value);
+                    query.bind(key, "%" + processedValue + "%");
                     break;
+
                 case STARTS_WITH:
-                    processedValue = processedValue + "%";
+                    processedValue = processFilterValue(field, value);
+                    query.bind(key, processedValue + "%");
                     break;
+
                 case ENDS_WITH:
-                    processedValue = "%" + processedValue;
+                    processedValue = processFilterValue(field, value);
+                    query.bind(key, "%" + processedValue);
                     break;
+
                 default:
-                    // No pattern modification for other operators
+                    processedValue = processFilterValue(field, value);
+                    query.bind(key, processedValue);
                     break;
             }
+        }
+    }
+    /**
+     * Bind parameters para operadores IN/NOT_IN con soporte para Enum y Array
+     */
+    private void bindInParameters(Query query, String key, Field field, Object value) {
+        List<?> values = parseInValue(value);
 
-            query.bind(key, processedValue); // ¡Usamos la clave original 'key' como nombre del parámetro!
+        // Procesar cada valor según el tipo de campo
+        List<Object> processedValues = new ArrayList<>();
+        for (Object item : values) {
+            if (field.isAnnotationPresent(EnumColumn.class)) {
+                // Para campos enum, convertir string a enum y luego procesar
+                Object enumValue = parseEnumValue(field, item);
+                processedValues.add(processFilterValue(field, enumValue));
+            } else {
+                processedValues.add(processFilterValue(field, item));
+            }
+        }
+
+        // Binding manual para cada valor
+        for (int i = 0; i < processedValues.size(); i++) {
+            query.bind(key + "_" + i, processedValues.get(i));
+        }
+    }
+
+    /**
+     * Bind parameters para operador BETWEEN
+     */
+    private void bindBetweenParameters(Query query, String key, Field field, FilterCondition condition) {
+        Object minValue = processFilterValue(field, condition.getValue());
+        Object maxValue = processFilterValue(field, condition.getSecondValue());
+
+        query.bind(key + "_min", minValue);
+        query.bind(key + "_max", maxValue);
+    }
+
+    /**
+     * Parsea valor para IN - acepta String separado por comas, List, o Array
+     */
+    private List<?> parseInValue(Object value) {
+        if (value instanceof String) {
+            String strValue = (String) value;
+            if (strValue.contains(",")) {
+                return Arrays.asList(strValue.split("\\s*,\\s*"));
+            } else {
+                return Collections.singletonList(strValue);
+            }
+        } else if (value instanceof List) {
+            return (List<?>) value;
+        } else if (value instanceof Object[]) {
+            return Arrays.asList((Object[]) value);
+        } else {
+            return Collections.singletonList(value);
+        }
+    }
+
+    /**
+     * Parsea string a enum value
+     */
+    private Object parseEnumValue(Field field, Object value) {
+        if (!(value instanceof String)) {
+            return value;
+        }
+
+        String strValue = (String) value;
+        Class<?> enumClass = field.getType();
+
+        if (!enumClass.isEnum()) {
+            return value;
+        }
+
+        // Intentar por nombre
+        try {
+            return Enum.valueOf((Class<Enum>) enumClass, strValue);
+        } catch (IllegalArgumentException e) {
+            // Si falla, intentar por código si es EnumType.CODE
+            EnumColumn enumAnnotation = field.getAnnotation(EnumColumn.class);
+            if (enumAnnotation != null && enumAnnotation.value() == EnumColumn.EnumType.CODE) {
+                Object[] constants = enumClass.getEnumConstants();
+                for (Object constant : constants) {
+                    try {
+                        Method getCodeMethod = constant.getClass().getMethod("getCode");
+                        if (getCodeMethod.invoke(constant).toString().equals(strValue)) {
+                            return constant;
+                        }
+                    } catch (Exception ex) {
+                        // Continuar con el siguiente
+                    }
+                }
+            }
+            return value; // Si no se puede convertir, devolver el valor original
         }
     }
 

@@ -282,4 +282,42 @@ public class TestMysql {
         List<TestSimpleUserMysql> users = repository.listSimpleUsers();
         users.forEach(System.out::println);
     }
+
+    @Test
+    void testIn(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "name_IN","Alice 0,Bob 1,Charlie 2"
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+    @Test
+    void testNotIn(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "name_NOT_IN","Alice 0,Bob 1,Charlie 2"
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+    @Test
+    void testBetween(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "createdAt_BETWEEN","2025-09-21 23:00:00,2025-09-22 23:59:59"
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+
+    @Test
+    void testNotNull(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "id_IS_NOT_NULL",""
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+
+    @Test
+    void testNull(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "id_IS_NULL",""
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
 }
