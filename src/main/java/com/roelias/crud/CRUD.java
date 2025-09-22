@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.core.statement.PreparedBatch;
+import org.jdbi.v3.core.statement.Query;
 import org.jdbi.v3.core.statement.Update;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -857,6 +858,420 @@ public abstract class CRUD<E, ID> {
         Column column = field.getAnnotation(Column.class);
         return column != null && !column.value().isEmpty() ? column.value() : field.getName();
     }
+    // ================================
+
+    // FILTERING EXTENSIONS
+    // ================================
+
+    private static final Set<String> RESERVED_KEYWORDS = Set.of(
+            "page", "size", "limit", "offset", "sortBy", "sortOrder"
+    );
+
+
+    public enum FilterOperator {
+        EQUALS("="),
+        NOT_EQUALS("!="),
+        GREATER_THAN(">"),
+        LESS_THAN("<"),
+        GREATER_THAN_OR_EQUAL(">="),
+        LESS_THAN_OR_EQUAL("<="),
+        LIKE("LIKE"),
+        NOT_LIKE("NOT LIKE"),
+        STARTS_WITH("LIKE"),  // Usa LIKE en SQL, pero con patrón 'value%'
+        ENDS_WITH("LIKE");
+        private final String sqlOperator;
+
+        FilterOperator(String sqlOperator) {
+            this.sqlOperator = sqlOperator;
+        }
+
+        public String getSqlOperator() {
+            return sqlOperator;
+        }
+    }
+
+    private static class FilterCondition {
+        private final String fieldName;
+        private final FilterOperator operator;
+        private final Object value;
+
+        public FilterCondition(String fieldName, FilterOperator operator, Object value) {
+            this.fieldName = fieldName;
+            this.operator = operator;
+            this.value = value;
+        }
+
+        public String getFieldName() {
+            return fieldName;
+        }
+
+        public FilterOperator getOperator() {
+            return operator;
+        }
+
+        public Object getValue() {
+            return value;
+        }
+    }
+
+
+    // ================================
+// FILTERING OPERATIONS
+// ================================
+
+    /**
+     * Finds entities matching the specified filters.
+     * <p>
+     * Supports exact match filtering on entity fields. Field names in the map should match
+     * entity field names (not necessarily column names). The method automatically converts
+     * field names to database column names and handles type transformations.
+     * </p>
+     *
+     * <h4>Example:</h4>
+     * <pre>{@code
+     * Map<String, Object> filters = new HashMap<>();
+     * filters.put("name", "John");
+     * filters.put("active", true);
+     * filters.put("age", 25);
+     *
+     * List<User> users = userCRUD.findAll(filters);
+     * // Generates: SELECT * FROM users WHERE name = :name AND active = :active AND age = :age
+     * }</pre>
+     *
+     * @param filters map of field names to filter values
+     * @return list of entities matching the filters
+     * @throws IllegalArgumentException if filter field doesn't exist in entity
+     */
+    public List<E> findAll(Map<String, Object> filters) {
+        if (filters == null || filters.isEmpty()) {
+            return findAll();
+        }
+
+        return jdbi.withHandle(handle -> {
+            String sql = buildSelectSqlWithFilters(filters);
+            var query = handle.createQuery(sql);
+            // Bind filter parameters
+            bindFilterParameters(query, filters);
+            return query.map(getRowMapper()).list();
+        });
+    }
+
+    /**
+     * Finds entities matching filters with pagination.
+     *
+     * @param filters map of field names to filter values
+     * @param limit maximum number of records to return
+     * @param offset number of records to skip
+     * @return list of entities matching the filters within specified range
+     */
+    public List<E> findAll(Map<String, Object> filters, int limit, int offset) {
+        if (filters == null || filters.isEmpty()) {
+            return findAll(limit, offset);
+        }
+
+        return jdbi.withHandle(handle -> {
+            String sql = buildSelectSqlWithFilters(filters) + " LIMIT :limit OFFSET :offset";
+            var query = handle.createQuery(sql)
+                    .bind("limit", limit)
+                    .bind("offset", offset);
+            bindFilterParameters(query, filters);
+
+            return query.map(getRowMapper()).list();
+        });
+    }
+
+    /**
+     * Counts entities matching the specified filters.
+     *
+     * @param filters map of field names to filter values
+     * @return count of entities matching the filters
+     */
+    public long count(Map<String, Object> filters) {
+        if (filters == null || filters.isEmpty()) {
+            return count();
+        }
+
+        return jdbi.withHandle(handle -> {
+            String whereClause = buildWhereClause(filters);
+            String sql = "SELECT COUNT(*) FROM " + tableName + whereClause;
+
+            var query = handle.createQuery(sql);
+            bindFilterParameters(query, filters);
+
+            return query.mapTo(Long.class).one();
+        });
+    }
+
+    /**
+     * Checks if any entity exists matching the specified filters.
+     *
+     * @param filters map of field names to filter values
+     * @return true if at least one matching entity exists
+     */
+    public boolean exists(Map<String, Object> filters) {
+        if (filters == null || filters.isEmpty()) {
+            return count() > 0;
+        }
+
+        return jdbi.withHandle(handle -> {
+            String whereClause = buildWhereClause(filters);
+            String sql = "SELECT 1 FROM " + tableName + whereClause + " LIMIT 1";
+
+            var query = handle.createQuery(sql);
+            bindFilterParameters(query, filters);
+
+            return query.mapTo(Integer.class).findOne().isPresent();
+        });
+    }
+
+    /**
+     * Finds entities matching filters with sorting.
+     *
+     * @param filters map of field names to filter values
+     * @param sortBy field name to sort by
+     * @param ascending true for ascending order, false for descending
+     * @return sorted list of entities matching the filters
+     */
+    public List<E> findAll(Map<String, Object> filters, String sortBy, boolean ascending) {
+        return jdbi.withHandle(handle -> {
+            String whereClause = buildWhereClause(filters);
+            String orderClause = buildOrderClause(sortBy, ascending);
+            String sql = "SELECT * FROM " + tableName + whereClause + orderClause;
+
+            var query = handle.createQuery(sql);
+
+            bindFilterParameters(query, filters);
+
+            return query.map(getRowMapper()).list();
+        });
+    }
+
+    /**
+     * Builds ORDER BY clause.
+     */
+    private String buildOrderClause(String sortBy, boolean ascending) {
+        Field field = getFieldByName(sortBy);
+        String columnName = getColumnName(field);
+        String direction = ascending ? "ASC" : "DESC";
+        return " ORDER BY " + columnName + " " + direction;
+    }
+
+
+// ================================
+// SQL GENERATION FOR FILTERS
+// ================================
+
+    /**
+     * Builds SELECT SQL with WHERE clause based on filters.
+     *
+     * @param filters map of field names to filter values
+     * @return complete SELECT SQL statement
+     */
+    private String buildSelectSqlWithFilters(Map<String, Object> filters) {
+        String whereClause = buildWhereClause(filters);
+        return "SELECT * FROM " + tableName + whereClause;
+    }
+
+    /**
+     * Builds WHERE clause from filters.
+     *
+     * @param filters map of field names to filter values
+     * @return WHERE clause string (e.g., " WHERE col1 = :field1 AND col2 = :field2")
+     */
+    private String buildWhereClause(Map<String, Object> filters) {
+        if (filters.isEmpty()) {
+            return "";
+        }
+
+        StringJoiner whereConditions = new StringJoiner(" AND ");
+
+        for (Map.Entry<String, Object> entry : filters.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+
+            if (RESERVED_KEYWORDS.contains(key)) {
+                continue;
+            }
+
+            FilterCondition condition = parseFilterCondition(key, value);
+            Field field = getFieldByName(condition.getFieldName());
+            String columnName = getColumnName(field);
+
+            String operator = condition.getOperator().getSqlOperator();
+            String placeholder = ":" + key;
+
+            if (condition.getOperator() == FilterOperator.LIKE || condition.getOperator() == FilterOperator.NOT_LIKE) {
+                placeholder = "CONCAT('%', :" + key + ", '%')";
+            } else if (condition.getOperator() == FilterOperator.STARTS_WITH) {
+                placeholder = "CONCAT(:" + key + ", '%')";
+            } else if (condition.getOperator() == FilterOperator.ENDS_WITH) {
+                placeholder = "CONCAT('%', :" + key + ")";
+            }
+
+            whereConditions.add(columnName + " " + operator + " " + placeholder);
+        }
+
+        if (whereConditions.length() == 0) {
+            return "";
+        }
+
+        return " WHERE " + whereConditions.toString();
+
+    }
+
+    /**
+     * Gets field by name with validation.
+     *
+     * @param key the field name to look up
+     * @return the Field object
+     * @throws IllegalArgumentException if field doesn't exist
+     */
+    private Field getFieldByName(String key) {
+        try {
+            Field field = entityClass.getDeclaredField(key);
+
+            // Verify field is not ignored and is accessible
+            if (field.isAnnotationPresent(Ignore.class)) {
+                throw new IllegalArgumentException(
+                        "Field '" + key + "' is annotated with @Ignore and cannot be used for filtering"
+                );
+            }
+            if(field.isAnnotationPresent(JsonColumn.class)){
+                if(field.getType() != String.class){
+                    throw new IllegalArgumentException(
+                            "Field '" + key + "' is annotated with @JsonColumn and must be of type String for filtering"
+                    );
+                }
+            }
+            if(field.isAnnotationPresent(FileColumn.class)){
+                throw new IllegalArgumentException(
+                        "Field '" + key + "' is annotated with @FileColumn and cannot be used for filtering"
+                );
+            }
+
+            return field;
+        } catch (NoSuchFieldException e) {
+            for (FilterOperator op : FilterOperator.values()) {
+                String suffix = "_" + op.name();
+                if (key.endsWith(suffix)) {
+                    String fieldName = key.substring(0, key.length() - suffix.length());
+                    try {
+                        Field field = entityClass.getDeclaredField(fieldName);
+                        if (field.isAnnotationPresent(Ignore.class)) {
+                            throw new IllegalArgumentException("Field '" + fieldName + "' is ignored.");
+                        }
+                        return field;
+                    } catch (NoSuchFieldException ex) {
+                        // Continuar con el siguiente operador
+                    }
+                }
+            }
+        }
+        throw new IllegalArgumentException("Field '" + key + "' does not exist in entity " + entityClass.getSimpleName());
+    }
+
+    /**
+     * Parses a filter key and value into a FilterCondition.
+     * Supports format: "fieldName" (implies EQUALS) or "fieldName_OPERATOR" (e.g., "age_GT").
+     *
+     * @param key   the filter key (e.g., "name", "age_GT")
+     * @param value the filter value
+     * @return a FilterCondition object
+     */
+    private FilterCondition parseFilterCondition(String key, Object value) {
+        // Verificar si la clave contiene un operador explícito
+        for (FilterOperator op : FilterOperator.values()) {
+            String suffix = "_" + op.name();
+            if (key.endsWith(suffix)) {
+                String fieldName = key.substring(0, key.length() - suffix.length());
+                return new FilterCondition(fieldName, op, value);
+            }
+        }
+        // Si no tiene sufijo de operador, se asume EQUALS
+        return new FilterCondition(key, FilterOperator.EQUALS, value);
+    }
+
+    /**
+     * Binds filter parameters to query with type transformations.
+     *
+     * @param query the JDBI query
+     * @param filters map of field names to filter values
+     */
+    private void bindFilterParameters(Query query, Map<String, Object> filters) {
+        for (Map.Entry<String, Object> entry : filters.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+
+            // Ignorar palabras reservadas
+            if (RESERVED_KEYWORDS.contains(key)) {
+                continue;
+            }
+
+            FilterCondition condition = parseFilterCondition(key, value);
+            Field field = getFieldByName(condition.getFieldName());
+
+            // Para operadores LIKE, el valor se pasa tal cual; el SQL se encarga de agregar '%'
+            Object processedValue = processFilterValue(field, value);
+            query.bind(key, processedValue); // ¡Usamos la clave original 'key' como nombre del parámetro!
+        }
+    }
+
+    /**
+     * Processes filter values with type transformations.
+     * Similar to processFieldValue but optimized for filtering.
+     *
+     * @param field the field being filtered
+     * @param value the filter value
+     * @return transformed value suitable for SQL binding
+     */
+    private Object processFilterValue(Field field, Object value) {
+        if (value == null) return null;
+
+        // JSON Column filtering - serialize objects to JSON string
+        if (field.isAnnotationPresent(JsonColumn.class) && !(value instanceof String)) {
+            try {
+                return objectMapper.writeValueAsString(value);
+            } catch (Exception e) {
+                throw new RuntimeException("Error serializing JSON filter value for field: " + field.getName(), e);
+            }
+        }
+
+        // Enum Column transformation
+        if (field.isAnnotationPresent(EnumColumn.class) && value instanceof Enum) {
+            EnumColumn enumAnnotation = field.getAnnotation(EnumColumn.class);
+            Enum<?> enumValue = (Enum<?>) value;
+            switch (enumAnnotation.value()) {
+                case STRING:
+                    return enumValue.name();
+                case ORDINAL:
+                    return enumValue.ordinal();
+                case CODE:
+                    try {
+                        Method getCodeMethod = enumValue.getClass().getMethod("getCode");
+                        return getCodeMethod.invoke(enumValue);
+                    } catch (Exception e) {
+                        throw new IllegalStateException(
+                                "The enum " + enumValue.getClass().getName() +
+                                        " must have a getCode() method for @EnumColumn(EnumType.CODE)", e
+                        );
+                    }
+                default:
+                    return enumValue.ordinal();
+            }
+        }
+
+        // For array columns, we typically want to filter by individual elements
+        // This could be enhanced to support array operations in the future
+        if (field.isAnnotationPresent(ArrayColumn.class) && value instanceof String) {
+            // For now, treat array columns as simple string matching
+            // Future enhancement: support contains, overlaps, etc.
+            return value;
+        }
+
+        return value;
+    }
+
+
 
     // ================================
     // CRUD OPERATIONS

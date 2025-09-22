@@ -191,4 +191,89 @@ public class TestMysql {
             System.out.println("User with ID " + user.getId() + " exists: " + exists);
         }
     }
+
+    @Test
+    void testStartWith(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "name_STARTS_WITH", "F"
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+    @Test
+    void testEndsWith(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "name_ENDS_WITH", "0"
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+    @Test
+    void testContains(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "name_LIKE", "a"
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+    @Test
+    void testNotLike(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "name_NOT_LIKE", "a"
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+
+    @Test
+    void testEquals(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "status", Status.ACTIVE
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+
+    @Test
+    void testNotEquals(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "status_NOT_EQUALS", Status.ACTIVE
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+
+
+    @Test
+    void testGreaterThan(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "attempts_GREATER_THAN", 2
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+    @Test
+    void testLessThan(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "attempts_LESS_THAN", 2
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+
+    @Test
+    void geaterThanOrEqual(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "attempts_GREATER_THAN_OR_EQUAL", 2
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+    @Test
+    void lessThanOrEqual(){
+        List<TestUserMysql> users = repository.findAll(Map.of(
+                "attempts_LESS_THAN_OR_EQUAL", 2
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+
+    @Test
+    void testDefault()  {
+          List<TestUserMysql>  users = repository.findAll(Map.of(
+                "active", true,
+                "attempts", 0
+        ));
+        users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
 }
