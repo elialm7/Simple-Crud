@@ -23,7 +23,6 @@ public class TestMysql {
     static void setupDatabase(){
         Jdbi jdbi = Jdbi.create("jdbc:mysql://localhost:3306/test_crud", "root", "admin");
         repository = new MysqlRepository(jdbi);
-        CRUD.setDebugMode(true);
     }
 
 
@@ -334,8 +333,14 @@ public class TestMysql {
     @Test
     void testIsnull(){
         List<TestUserMysql> users = repository.findAll(Map.of(
-                "preferences_IS_NULL",true
+                "preferences_IS_NULL",true,
+                "page", 10
         ));
         users.forEach(u -> System.out.println("Found User: " + u.getName()));
+    }
+
+    @Test
+    void testTableCreation(){
+        System.out.println(repository.getTableCreationTemplate());
     }
 }
