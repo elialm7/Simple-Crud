@@ -124,51 +124,51 @@ public class TestUserCRUD extends CRUD<TestUserPostgresql, Long> {
 Jdbi jdbi = Jdbi.create("jdbc:postgresql://localhost/mydb", "user", "pass");
 TestUserCRUD crud = new TestUserCRUD(jdbi);
 
-// Create
+// Crear usuario
 TestUserPostgresql user = new TestUserPostgresql();
 user.setName("John Doe");
 user.setPreferences(new UserPreferences("dark", true, Map.of("lang", "en")));
-user.setMetadata(Map.of("version","1.0"));
-user.setTags(List.of("important","test"));
-user.setCategories(new String[]{"cat1","cat2"});
+user.setMetadata(Map.of("version", "1.0"));
+user.setTags(List.of("important", "test"));
+user.setCategories(new String[]{"cat1", "cat2"});
 user.setStatus(Status.ACTIVE);
 user.setPriority(Priority.HIGH);
 user.setDepartment(Department.ENGINEERING);
-user.setActive(true); // Will use default if null
+user.setActive(true); // Usará el valor por defecto si es null
 
 Long id = crud.save(user);
 
-// Read All
+// Leer todos
 List<TestUserPostgresql> allUsers = crud.findAll();
 
-// Find by ID
+// Buscar por ID
 Optional<TestUserPostgresql> oneUser = crud.findById(id);
 
-// Dynamic Filtering
+// Filtros dinámicos
 Map<String, Object> filters = new HashMap<>();
 filters.put("name_LIKE", "John"); // LIKE '%John%'
 filters.put("status", "ACTIVE"); // EQUALS
 filters.put("priority_GREATER_THAN", 1);
-filters.put("tags_LIKE", "%test%"); // Filter on joined string
-filters.put("uuid_IS_NOT_NULL", ""); // Check for non-null UUID
+filters.put("tags_LIKE", "%test%"); // Filtra sobre el string unido
+filters.put("uuid_IS_NOT_NULL", ""); // Verifica UUID no nulo
 
 List<TestUserPostgresql> filteredUsers = crud.findAll(filters);
 
-// Advanced Filtering
+// Filtros avanzados
 filters.clear();
 filters.put("priority_BETWEEN", "1,3"); // BETWEEN 1 AND 3
 filters.put("department_IN", "SALE,ENG"); // IN ('SALE', 'ENG')
 
 filteredUsers = crud.findAll(filters);
 
-// Update
+// Actualizar
 user.setName("John Updated");
 crud.update(user);
 
-// Delete
+// Eliminar
 crud.deleteById(id);
 
-// Batch Insert
+// Inserción en lote
 List<TestUserPostgresql> users = createManyUsers();
 crud.saveAll(users);
 ```
@@ -276,76 +276,7 @@ CREATE TABLE complex_entities (
 | Others     | ⚠ Untested – basic types might work, but no guarantees.   |
 
 > ✅ **Only MySQL and PostgreSQL are officially supported and fully tested.** Other databases may work for basic operations but lack dialect-specific optimizations.
-
 ---
-
-## 6. Filtering Queries
-
-The library supports powerful, dynamic filtering using a `Map<String, Object>`.
-
-### Basic Operators
-
-* **`fieldName`**: Implies `EQUALS`.
-* **`fieldName_NOT_EQUALS`**: Not equal.
-* **`fieldName_GREATER_THAN`**: Greater than.
-* **`fieldName_LESS_THAN`**: Less than.
-* **`fieldName_GREATER_THAN_OR_EQUAL`**: Greater than or equal.
-* **`fieldName_LESS_THAN_OR_EQUAL`**: Less than or equal.
-* **`fieldName_LIKE`**: Contains (LIKE '%value%').
-* **`fieldName_STARTS_WITH`**: Starts with (LIKE 'value%').
-* **`fieldName_ENDS_WITH`**: Ends with (LIKE '%value').
-
-### Advanced Operators
-
-* **`fieldName_IN`**: Value is in a set. Value can be a `String` (comma-separated), `List`, or `Object[]`.
-* **`fieldName_NOT_IN`**: Value is not in a set.
-* **`fieldName_BETWEEN`**: Value is between two values. Value must be a `String` ("min,max"), `List` (size 2), or `Object[]` (size 2).
-* **`fieldName_IS_NULL`**: Field is NULL.
-* **`fieldName_IS_NOT_NULL`**: Field is NOT NULL.
-
-### Filtering Restrictions
-
-* **`@JsonColumn`**: Only supports `EQUALS`, `IS_NULL`, `IS_NOT_NULL`.
-* **`@FileColumn`**: Only supports `IS_NULL`, `IS_NOT_NULL`.
-* **`@Ignore`**: Cannot be used for filtering.
-
-### Example
-
-```java
-Map<String, Object> filters = new HashMap<>();
-
-// Simple equals
-filters.put("status", "ACTIVE");
-
-// LIKE
-filters.put("name_LIKE", "John");
-
-// IN
-filters.put("department_IN", "SALE,ENG"); // String
-// or
-filters.put("department_IN", List.of("SALE", "ENG")); // List
-
-// BETWEEN
-filters.put("priority_BETWEEN", "1,3"); // String
-// or
-filters.put("priority_BETWEEN", new Object[]{1, 3}); // Array
-
-// IS NOT NULL
-filters.put("uuid_IS_NOT_NULL", "");
-
-// Pagination + Sorting
-List<TestUserPostgresql> page = crud.findAll(filters, 10, 0); // Limit 10, Offset 0
-List<TestUserPostgresql> sorted = crud.findAll(filters, "name", true); // Sort by name ASC
-
-// Count
-long count = crud.count(filters);
-
-// Exists
-boolean exists = crud.exists(filters);
-```
-
----
-
 ## 7. Notes & Best Practices
 
 * **UUID**: For PostgreSQL, prefer `java.util.UUID` type for native handling. For MySQL, `String` is fine.
