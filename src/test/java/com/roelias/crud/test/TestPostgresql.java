@@ -192,6 +192,7 @@ public class TestPostgresql {
         }
     }
 
+
     @Test
     void testCreationTableTemplate(){
         System.out.println(repository.getTableCreationTemplate());
