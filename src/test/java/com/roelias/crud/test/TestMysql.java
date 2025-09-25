@@ -1,10 +1,8 @@
 package com.roelias.crud.test;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.roelias.crud.CRUD;
 import com.roelias.crud.entities.*;
 import com.roelias.crud.repositories.MysqlRepository;
-import com.roelias.crud.repositories.PostgresqlRepository;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -18,10 +16,11 @@ public class TestMysql {
 
 
     private static ObjectMapper mapper = new ObjectMapper();
+    private static Jdbi jdbi;
     private static MysqlRepository repository;
     @BeforeAll
     static void setupDatabase(){
-        Jdbi jdbi = Jdbi.create("jdbc:mysql://localhost:3306/test_crud", "root", "admin");
+        jdbi = Jdbi.create("jdbc:mysql://localhost:3306/test_crud", "root", "admin");
         repository = new MysqlRepository(jdbi);
     }
 
