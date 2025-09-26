@@ -370,7 +370,7 @@ public abstract class CRUD<E, ID> {
      * @Throws IllegalStateException if no JDBI instance or provider is set
      */
 
-    private Jdbi getConfiguredJdbi(){
+    protected Jdbi getConfiguredJdbi(){
         if(userJdbiProvider){
             if(provider == null){
                 throw new IllegalStateException("JdbiProvider not set. Use useProvider() to set it before performing operations.");
