@@ -360,7 +360,7 @@ public abstract class CRUD<E, ID> {
      * Sets a JDBI provider to be used for database operations.
      * @param jdbiProvider the JDBI provider
      */
-    protected void useProvider(JdbiProvider jdbiProvider) {
+    public void useProvider(JdbiProvider jdbiProvider) {
         this.provider = jdbiProvider;
     }
 
@@ -370,7 +370,7 @@ public abstract class CRUD<E, ID> {
      * @Throws IllegalStateException if no JDBI instance or provider is set
      */
 
-    protected Jdbi getConfiguredJdbi(){
+    public Jdbi getConfiguredJdbi(){
         if(userJdbiProvider){
             if(provider == null){
                 throw new IllegalStateException("JdbiProvider not set. Use useProvider() to set it before performing operations.");
@@ -408,7 +408,7 @@ public abstract class CRUD<E, ID> {
      *
      * @return the ID column name
      */
-    protected String getIdColumnName() {
+    public String getIdColumnName() {
         Field idField = getIdField();
         Column column = idField.getAnnotation(Column.class);
         return column != null && !column.value().isEmpty() ? column.value() : idField.getName();
@@ -418,7 +418,7 @@ public abstract class CRUD<E, ID> {
      *  Gets the table name for the entity.
      * @return  the table name
      */
-    protected  String getTableName(){
+    public  String getTableName(){
         return tableName;
     }
     /**
@@ -426,7 +426,7 @@ public abstract class CRUD<E, ID> {
      *
      * @return the ID type class
      */
-    protected Class<ID> getIdType() {
+    public Class<ID> getIdType() {
         return idType;
     }
 
@@ -438,7 +438,7 @@ public abstract class CRUD<E, ID> {
      *
      * @return the row mapper for this entity type
      */
-    protected org.jdbi.v3.core.mapper.RowMapper<E> getRowMapper() {
+    public org.jdbi.v3.core.mapper.RowMapper<E> getRowMapper() {
          return (rs, ctx) -> mapRow(rs, entityClass);
     }
 
@@ -888,7 +888,7 @@ public abstract class CRUD<E, ID> {
      *
      * @return the INSERT SQL statement
      */
-    protected String buildInsertSql() {
+    public String buildInsertSql() {
         return insertSqlCache.computeIfAbsent(entityClass, clazz -> {
             Field[] fields = getInsertableFields();
 
@@ -927,7 +927,7 @@ public abstract class CRUD<E, ID> {
      *
      * @return the UPDATE SQL statement
      */
-    protected String buildUpdateSql() {
+    public String buildUpdateSql() {
         return updateSqlCache.computeIfAbsent(entityClass, clazz -> {
             Field[] fields = getUpdatableFields();
             Field idField = getIdField();
@@ -972,7 +972,7 @@ public abstract class CRUD<E, ID> {
      * @param update the JDBI Update statement
      * @param entity the entity to bind
      */
-    protected void bindInsertParameters(Update update, E entity) {
+    public void bindInsertParameters(Update update, E entity) {
         processEntityForInsert(entity);
         bindParameters(update, entity, getInsertableFields());
     }
@@ -986,7 +986,7 @@ public abstract class CRUD<E, ID> {
      * @param update the JDBI Update statement
      * @param entity the entity to bind
      */
-    protected void bindUpdateParameters(Update update, E entity) {
+    public void bindUpdateParameters(Update update, E entity) {
         processEntityForUpdate(entity);
         bindParameters(update, entity, getAllFields());
     }
@@ -997,7 +997,7 @@ public abstract class CRUD<E, ID> {
      * @param batch the JDBI PreparedBatch statement
      * @param entity the entity to bind
      */
-    protected void bindBatchParameters(PreparedBatch batch, E entity) {
+    public void bindBatchParameters(PreparedBatch batch, E entity) {
         processEntityForInsert(entity);
         bindParameters(batch, entity, getInsertableFields());
     }
